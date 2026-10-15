@@ -49,3 +49,25 @@ calc 20/0;
 calc 13.2/0.0;
 calc "123" + 4;
 calc "abc" + 4;
+
+-- echo table metadata
+show tables;
+desc t_basic;
+
+-- echo indexed select
+select * from t_basic where id=1;
+-- sort select * from t_basic where id>=5 and id<7;
+-- sort select * from t_basic where id>5 and id<=7;
+select * from t_basic where id=8;
+select * from t_basic where id=1 and age=2;
+
+-- echo indexed insert and delete
+insert into t_basic values(8,8, 'h', 8.8);
+select * from t_basic where id=8;
+insert into t_basic values(8,9, 'i', 9.9);
+-- sort select * from t_basic where id=8;
+delete from t_basic where id=8 and age=8;
+select * from t_basic where id=8;
+delete from t_basic where id=8;
+select * from t_basic where id=8;
+-- sort select * from t_basic;

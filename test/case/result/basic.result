@@ -138,3 +138,61 @@ calc "123" + 4;
 calc "abc" + 4;
 "abc" + 4
 4
+
+TABLE METADATA
+show tables;
+TABLES_IN_SYS
+T_BASIC
+desc t_basic;
+FIELD | TYPE | LENGTH
+ID | INTS | 4
+AGE | INTS | 4
+NAME | CHARS | 4
+SCORE | FLOATS | 4
+
+INDEXED SELECT
+select * from t_basic where id=1;
+ID | AGE | NAME | SCORE
+1 | 1 | A | 1
+select * from t_basic where id>=5 and id<7;
+5 | 5 | E | 5.5
+6 | 6 | F | 6.6
+ID | AGE | NAME | SCORE
+select * from t_basic where id>5 and id<=7;
+6 | 6 | F | 6.6
+7 | 7 | G | 7.7
+ID | AGE | NAME | SCORE
+select * from t_basic where id=8;
+ID | AGE | NAME | SCORE
+select * from t_basic where id=1 and age=2;
+ID | AGE | NAME | SCORE
+
+INDEXED INSERT AND DELETE
+insert into t_basic values(8,8, 'h', 8.8);
+SUCCESS
+select * from t_basic where id=8;
+ID | AGE | NAME | SCORE
+8 | 8 | H | 8.8
+insert into t_basic values(8,9, 'i', 9.9);
+SUCCESS
+select * from t_basic where id=8;
+8 | 8 | H | 8.8
+8 | 9 | I | 9.9
+ID | AGE | NAME | SCORE
+delete from t_basic where id=8 and age=8;
+SUCCESS
+select * from t_basic where id=8;
+ID | AGE | NAME | SCORE
+8 | 9 | I | 9.9
+delete from t_basic where id=8;
+SUCCESS
+select * from t_basic where id=8;
+ID | AGE | NAME | SCORE
+select * from t_basic;
+1 | 1 | A | 1
+2 | 2 | B | 2
+4 | 4 | C | 3
+5 | 5 | E | 5.5
+6 | 6 | F | 6.6
+7 | 7 | G | 7.7
+ID | AGE | NAME | SCORE
