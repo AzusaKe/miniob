@@ -41,6 +41,10 @@ public:
 
 public:
   int32_t next_trx_id();
+  int32_t current_trx_id() const;
+
+  /// Restore the transaction sequence without reusing IDs from persisted records.
+  void advance_trx_id(int32_t trx_id);
 
 public:
   int32_t max_trx_id() const;

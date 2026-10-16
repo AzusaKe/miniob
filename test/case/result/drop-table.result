@@ -1,0 +1,135 @@
+DROPPING EMPTY AND MISSING TABLES
+show tables;
+TABLES_IN_SYS
+drop table drop_missing;
+FAILURE
+create table drop_empty(id int);
+SUCCESS
+desc drop_empty;
+FIELD | TYPE | LENGTH
+ID | INTS | 4
+drop table drop_empty;
+SUCCESS
+show tables;
+TABLES_IN_SYS
+desc drop_empty;
+FAILURE
+drop table drop_empty;
+FAILURE
+
+DROPPING POPULATED TABLES INVALIDATES ALL TABLE OPERATIONS
+create table drop_keep(id int, birthday date);
+SUCCESS
+insert into drop_keep values(7, '1969-12-31');
+SUCCESS
+create index drop_keep_id on drop_keep(id);
+SUCCESS
+create table drop_rows(id int, label char(12));
+SUCCESS
+insert into drop_rows values(1, 'old');
+SUCCESS
+insert into drop_rows values(2, 'older');
+SUCCESS
+select * from drop_rows;
+1 | OLD
+2 | OLDER
+ID | LABEL
+drop table drop_rows;
+SUCCESS
+select * from drop_rows;
+FAILURE
+insert into drop_rows values(3, 'gone');
+FAILURE
+delete from drop_rows where id = 1;
+FAILURE
+create index drop_rows_id on drop_rows(id);
+FAILURE
+desc drop_rows;
+FAILURE
+select * from drop_keep where id = 7;
+ID | BIRTHDAY
+7 | 1969-12-31
+
+DROPPING INDEXED DATES AND RECREATING THE TABLE WITH A NEW SCHEMA
+create table drop_indexed(id int, birthday date, label char(12));
+SUCCESS
+create index drop_indexed_id on drop_indexed(id);
+SUCCESS
+create index drop_indexed_date on drop_indexed(birthday);
+SUCCESS
+insert into drop_indexed values(1, '1900-2-28', 'old');
+SUCCESS
+insert into drop_indexed values(2, '2038-2-1', 'older');
+SUCCESS
+select id from drop_indexed where birthday = '2038-2-1';
+ID
+2
+drop table drop_indexed;
+SUCCESS
+show tables;
+TABLES_IN_SYS
+DROP_KEEP
+create table drop_indexed(birthday date, id int, tag char(8));
+SUCCESS
+desc drop_indexed;
+FIELD | TYPE | LENGTH
+BIRTHDAY | DATES | 4
+ID | INTS | 4
+TAG | CHARS | 8
+select * from drop_indexed;
+BIRTHDAY | ID | TAG
+create index drop_indexed_id on drop_indexed(id);
+SUCCESS
+create index drop_indexed_date on drop_indexed(birthday);
+SUCCESS
+insert into drop_indexed values('2400-2-29', 9, 'fresh');
+SUCCESS
+select * from drop_indexed where id = 1;
+BIRTHDAY | ID | TAG
+select * from drop_indexed where birthday = '2038-2-1';
+BIRTHDAY | ID | TAG
+select * from drop_indexed where id = 9;
+BIRTHDAY | ID | TAG
+2400-02-29 | 9 | FRESH
+select id from drop_indexed where birthday = '2400-2-29';
+ID
+9
+drop table drop_indexed;
+SUCCESS
+
+REPEATED INDEXED RECREATION CONTAINS ONLY FRESH ROWS
+create table drop_indexed(id int);
+SUCCESS
+create index drop_indexed_id on drop_indexed(id);
+SUCCESS
+select * from drop_indexed;
+ID
+insert into drop_indexed values(99);
+SUCCESS
+select * from drop_indexed where id = 99;
+ID
+99
+select * from drop_indexed where id = 9;
+ID
+drop table drop_indexed;
+SUCCESS
+drop table drop_indexed;
+FAILURE
+
+UNRELATED INDEXED DATA IS PRESERVED AND ALL DROPPED NAMES DISAPPEAR
+select * from drop_keep where id = 7;
+ID | BIRTHDAY
+7 | 1969-12-31
+insert into drop_keep values(8, '2000-2-29');
+SUCCESS
+select * from drop_keep;
+7 | 1969-12-31
+8 | 2000-02-29
+ID | BIRTHDAY
+show tables;
+TABLES_IN_SYS
+DROP_KEEP
+drop table drop_keep;
+SUCCESS
+show tables;
+TABLES_IN_SYS

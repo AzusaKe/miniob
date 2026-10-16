@@ -29,6 +29,28 @@ TEST(CatalogTest, catalog_test)
   EXPECT_EQ(catalog.get_table_stats(-1).row_nums, 0);
 }
 
+TEST(CatalogTest, remove_table_stats)
+{
+  Catalog &catalog = Catalog::get_instance();
+  const int table_id = 2;
+  const int other_table_id = 3;
+
+  catalog.update_table_stats(table_id, TableStats(100));
+  catalog.update_table_stats(other_table_id, TableStats(200));
+
+  catalog.remove_table_stats(table_id);
+  EXPECT_EQ(catalog.get_table_stats(table_id).row_nums, 0);
+  EXPECT_EQ(catalog.get_table_stats(other_table_id).row_nums, 200);
+
+  catalog.remove_table_stats(table_id);
+  catalog.remove_table_stats(-2);
+  EXPECT_EQ(catalog.get_table_stats(table_id).row_nums, 0);
+  EXPECT_EQ(catalog.get_table_stats(other_table_id).row_nums, 200);
+
+  catalog.remove_table_stats(table_id);
+  catalog.remove_table_stats(other_table_id);
+}
+
 int main(int argc, char **argv)
 {
 

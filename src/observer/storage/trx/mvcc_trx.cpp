@@ -44,6 +44,14 @@ const vector<FieldMeta> *MvccTrxKit::trx_fields() const { return &fields_; }
 
 int32_t MvccTrxKit::next_trx_id() { return ++current_trx_id_; }
 
+int32_t MvccTrxKit::current_trx_id() const { return current_trx_id_.load(); }
+
+void MvccTrxKit::advance_trx_id(int32_t trx_id)
+{
+  int32_t current = current_trx_id_.load();
+  while (current < trx_id && !current_trx_id_.compare_exchange_weak(current, trx_id)) {}
+}
+
 int32_t MvccTrxKit::max_trx_id() const { return numeric_limits<int32_t>::max(); }
 
 Trx *MvccTrxKit::create_trx(LogHandler &log_handler)
@@ -63,9 +71,7 @@ Trx *MvccTrxKit::create_trx(LogHandler &log_handler, int32_t trx_id)
   if (trx != nullptr) {
     lock_.lock();
     trxes_.push_back(trx);
-    if (current_trx_id_ < trx_id) {
-      current_trx_id_ = trx_id;
-    }
+    advance_trx_id(trx_id);
     lock_.unlock();
   }
   return trx;
@@ -450,7 +456,11 @@ RC MvccTrx::redo(Db *db, const LogEntry &log_entry)
     } break;
 
     case MvccTrxLogOperation::Type::COMMIT: {
-      // auto *trx_log_record = reinterpret_cast<const MvccTrxCommitLogEntry *>(log_entry.data());
+      if (log_entry.payload_size() < MvccTrxCommitLogEntry::SIZE) {
+        return RC::LOG_ENTRY_INVALID;
+      }
+      auto *trx_log_record = reinterpret_cast<const MvccTrxCommitLogEntry *>(log_entry.data());
+      trx_kit_.advance_trx_id(trx_log_record->commit_trx_id);
       // commit_with_trx_id(trx_log_record->commit_trx_id);
       // 遇到了提交日志，说明前面的记录都已经提交成功了
     } break;

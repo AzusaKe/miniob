@@ -18,15 +18,19 @@ See the Mulan PSL v2 for more details. */
 #include <sys/stat.h>
 
 #include "common/lang/string.h"
+#include "common/lang/sstream.h"
 #include "common/log/log.h"
 #include "common/os/path.h"
 #include "common/global_context.h"
+#include "catalog/catalog.h"
 #include "storage/common/meta_util.h"
 #include "storage/table/table.h"
 #include "storage/table/table_meta.h"
 #include "storage/trx/trx.h"
+#include "storage/trx/mvcc_trx.h"
 #include "storage/clog/disk_log_handler.h"
 #include "storage/clog/integrated_log_replayer.h"
+#include "storage/clog/log_entry.h"
 
 using namespace common;
 
@@ -176,6 +180,60 @@ RC Db::create_table(const char *table_name, span<const AttrInfoSqlNode> attribut
   return RC::SUCCESS;
 }
 
+RC Db::drop_table(const char *table_name)
+{
+  if (common::is_blank(table_name)) {
+    return RC::INVALID_ARGUMENT;
+  }
+  auto iter = opened_tables_.find(table_name);
+  if (iter == opened_tables_.end()) {
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+
+  // Checkpoint while every table and buffer pool referenced by earlier logs still exists.
+  // Recovery must not replay those logs after the table's files have been removed.
+  RC rc = sync();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  Table       *table     = iter->second;
+  const string name      = iter->first;
+  const string meta_file = table_meta_file(path_.c_str(), name.c_str());
+  vector<string> files = {
+      table_data_file(path_.c_str(), name.c_str()),
+      table_lob_file(path_.c_str(), name.c_str()),
+      meta_file + ".tmp",
+  };
+  for (int i = 0; i < table->table_meta().index_num(); i++) {
+    const IndexMeta *index = table->table_meta().index(i);
+    files.push_back(table_index_file(path_.c_str(), name.c_str(), index->name()));
+  }
+
+  // Remove the catalog entry on disk first. If that fails, leave the live table intact.
+  error_code ec;
+  filesystem::remove(meta_file, ec);
+  if (ec) {
+    LOG_ERROR("Failed to remove table metadata. file=%s, error=%s", meta_file.c_str(), ec.message().c_str());
+    return RC::FILE_REMOVE;
+  }
+
+  opened_tables_.erase(iter);
+  Catalog::get_instance().remove_table_stats(table->table_id());
+  // Destruction closes record/index handlers, purges their cached pages and unregisters
+  // their buffer pools before unlinking the remaining files.
+  delete table;
+
+  for (const string &file : files) {
+    filesystem::remove(file, ec);
+    if (ec) {
+      LOG_ERROR("Failed to remove table file. file=%s, error=%s", file.c_str(), ec.message().c_str());
+      rc = RC::FILE_REMOVE;
+    }
+  }
+  return rc;
+}
+
 Table *Db::find_table(const char *table_name) const
 {
   unordered_map<string, Table *>::const_iterator iter = opened_tables_.find(table_name);
@@ -260,6 +318,9 @@ RC Db::sync()
   auto dblwr_buffer = static_cast<DiskDoubleWriteBuffer *>(buffer_pool_manager_->get_dblwr_buffer());
   rc                = dblwr_buffer->flush_page();
   LOG_INFO("double write buffer flush pages ret=%s", strrc(rc));
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
 
   /*
   在sync期间，不允许有未完成的事务，也不允许开启新的事物。
@@ -286,6 +347,23 @@ RC Db::recover()
 {
   LOG_TRACE("db recover begin. check_point_lsn=%d", check_point_lsn_);
 
+  class CheckpointLogReplayer : public LogReplayer
+  {
+  public:
+    CheckpointLogReplayer(LogReplayer &replayer, LSN checkpoint_lsn)
+        : replayer_(replayer), checkpoint_lsn_(checkpoint_lsn)
+    {}
+
+    RC replay(const LogEntry &entry) override
+    {
+      return entry.lsn() <= checkpoint_lsn_ ? RC::SUCCESS : replayer_.replay(entry);
+    }
+
+  private:
+    LogReplayer &replayer_;
+    LSN          checkpoint_lsn_;
+  };
+
   LogReplayer *trx_log_replayer = trx_kit_->create_log_replayer(*this, *log_handler_);
   if (trx_log_replayer == nullptr) {
     LOG_ERROR("Failed to create trx log replayer.");
@@ -293,7 +371,10 @@ RC Db::recover()
   }
 
   IntegratedLogReplayer log_replayer(*buffer_pool_manager_, unique_ptr<LogReplayer>(trx_log_replayer));
-  RC                    rc = log_handler_->replay(log_replayer, check_point_lsn_ /*start_lsn*/);
+  CheckpointLogReplayer checkpoint_replayer(log_replayer, check_point_lsn_);
+  // The checkpoint itself is already persisted and may refer to a dropped table. Keep
+  // reading it so the log handler can recover its last LSN, but do not replay it.
+  RC rc = log_handler_->replay(checkpoint_replayer, check_point_lsn_ /*start_lsn*/);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to replay log. rc=%s", strrc(rc));
     return rc;
@@ -324,7 +405,6 @@ RC Db::init_meta()
     return RC::SUCCESS;
   }
 
-  RC  rc = RC::SUCCESS;
   int fd = open(db_meta_file_path.c_str(), O_RDONLY);
   if (fd < 0) {
     LOG_ERROR("Failed to open db meta file. db=%s, file=%s, errno=%s", 
@@ -334,25 +414,67 @@ RC Db::init_meta()
 
   char buffer[1024];
   int  n = read(fd, buffer, sizeof(buffer));
+  close(fd);
   if (n < 0) {
     LOG_ERROR("Failed to read db meta file. db=%s, file=%s, errno=%s", 
               name_.c_str(), db_meta_file_path.c_str(), strerror(errno));
-    rc = RC::IOERR_READ;
-  } else {
-    if (n >= static_cast<int>(sizeof(buffer))) {
-      LOG_WARN("Db meta file is too large. db=%s, file=%s, buffer size=%ld", 
-               name_.c_str(), db_meta_file_path.c_str(), sizeof(buffer));
-      return RC::IOERR_TOO_LONG;
-    }
-
-    buffer[n]        = '\0';
-    check_point_lsn_ = atoll(buffer);  // 当前元数据就这一个数字
-    LOG_INFO("Successfully read db meta file. db=%s, file=%s, check_point_lsn=%ld", 
-             name_.c_str(), db_meta_file_path.c_str(), check_point_lsn_);
+    return RC::IOERR_READ;
   }
-  close(fd);
+  if (n >= static_cast<int>(sizeof(buffer))) {
+    LOG_WARN("Db meta file is too large. db=%s, file=%s, buffer size=%ld",
+             name_.c_str(), db_meta_file_path.c_str(), sizeof(buffer));
+    return RC::IOERR_TOO_LONG;
+  }
 
-  return rc;
+  buffer[n] = '\0';
+  istringstream metadata(buffer);
+  if (!(metadata >> check_point_lsn_) || check_point_lsn_ < 0) {
+    LOG_ERROR("Invalid database checkpoint metadata. file=%s", db_meta_file_path.c_str());
+    return RC::IOERR_READ;
+  }
+
+  int32_t trx_id = 0;
+  metadata >> std::ws;
+  const bool has_trx_id = !metadata.eof();
+  if (has_trx_id && (!(metadata >> trx_id) || trx_id < 0)) {
+    LOG_ERROR("Invalid database transaction metadata. file=%s", db_meta_file_path.c_str());
+    return RC::IOERR_READ;
+  }
+
+  auto *mvcc_kit = dynamic_cast<MvccTrxKit *>(trx_kit_.get());
+  if (mvcc_kit != nullptr) {
+    mvcc_kit->advance_trx_id(trx_id);
+    if (!has_trx_id && check_point_lsn_ > 0) {
+      // Older metadata only stored an LSN. Recover the transaction sequence from
+      // log headers without replaying operations on tables that may be dropped.
+      auto recover_trx_id = [this, mvcc_kit](LogEntry &entry) -> RC {
+        if (entry.lsn() > check_point_lsn_ || entry.module().id() != LogModule::Id::TRANSACTION) {
+          return RC::SUCCESS;
+        }
+        if (entry.payload_size() < MvccTrxLogHeader::SIZE) {
+          return RC::LOG_ENTRY_INVALID;
+        }
+        auto *header = reinterpret_cast<const MvccTrxLogHeader *>(entry.data());
+        mvcc_kit->advance_trx_id(header->trx_id);
+        if (MvccTrxLogOperation(header->operation_type).type() == MvccTrxLogOperation::Type::COMMIT) {
+          if (entry.payload_size() < MvccTrxCommitLogEntry::SIZE) {
+            return RC::LOG_ENTRY_INVALID;
+          }
+          auto *commit = reinterpret_cast<const MvccTrxCommitLogEntry *>(entry.data());
+          mvcc_kit->advance_trx_id(commit->commit_trx_id);
+        }
+        return RC::SUCCESS;
+      };
+      RC rc = log_handler_->iterate(recover_trx_id, 0);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+  }
+
+  LOG_INFO("Successfully read db meta file. db=%s, file=%s, check_point_lsn=%ld, trx_id=%d",
+           name_.c_str(), db_meta_file_path.c_str(), check_point_lsn_, trx_id);
+  return RC::SUCCESS;
 }
 
 RC Db::flush_meta()
@@ -373,7 +495,9 @@ RC Db::flush_meta()
     return RC::IOERR_WRITE;
   }
 
-  string buffer = to_string(check_point_lsn_);
+  const auto *mvcc_kit = dynamic_cast<const MvccTrxKit *>(trx_kit_.get());
+  const int32_t trx_id = mvcc_kit == nullptr ? 0 : mvcc_kit->current_trx_id();
+  string buffer = to_string(check_point_lsn_) + " " + to_string(trx_id) + "\n";
   int    n      = write(fd, buffer.c_str(), buffer.size());
   if (n < 0) {
     LOG_ERROR("Failed to write db meta file. db=%s, file=%s, errno=%s", 
@@ -397,6 +521,10 @@ RC Db::flush_meta()
     }
   }
 
+  if (close(fd) < 0 && OB_SUCC(rc)) {
+    LOG_ERROR("Failed to close db meta file. file=%s, errno=%s", temp_meta_file_path.c_str(), strerror(errno));
+    rc = RC::IOERR_CLOSE;
+  }
   return rc;
 }
 

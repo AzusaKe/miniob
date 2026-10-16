@@ -50,6 +50,13 @@ public:
   void update_table_stats(int table_id, const TableStats &table_stats);
 
   /**
+   * @brief Removes statistics for a dropped table.
+   *
+   * @param table_id The identifier of the table whose statistics are removed.
+   */
+  void remove_table_stats(int table_id);
+
+  /**
    * @brief Gets the singleton instance of the Catalog.
    *
    * This method ensures there is only one instance of the Catalog.

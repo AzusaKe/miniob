@@ -40,6 +40,12 @@ public:
     Session *session = session_event->session();
     session->set_trx_multi_operation_mode(false);
     Trx *trx = session->current_trx();
+    // DROP TABLE may already have committed the previous transaction. A later
+    // COMMIT/ROLLBACK must also be safe when this session has no active work.
+    rc = trx->start_if_need();
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
 
     if (stmt->type() == StmtType::COMMIT) {
       rc = trx->commit();
