@@ -76,3 +76,60 @@ select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id w
 select jt_left.id from jt_left inner join jt_right on 1 = 0;
 set use_cascade=0;
 set execution_mode='tuple_iterator';
+
+-- echo character numeric joins parse prefixes without truncating fractional values
+create table jt_text(id int, txt char(24));
+create table jt_number(id int, age int, score float, num_text char(24));
+insert into jt_text values(1, '16a');
+insert into jt_text values(2, 'abc');
+insert into jt_text values(3, '');
+insert into jt_text values(4, '2.5tail');
+insert into jt_text values(5, '-3x');
+insert into jt_text values(6, '  +4.25rest');
+insert into jt_text values(7, '2');
+insert into jt_text values(8, '10');
+insert into jt_text values(9, '1e2tail');
+insert into jt_number values(1, 17, 16.5, '17');
+insert into jt_number values(2, 1, 0, '0');
+insert into jt_number values(3, 0, 1, '');
+insert into jt_number values(4, 2, 2.5, '2.5');
+insert into jt_number values(5, -2, -3, '-2');
+insert into jt_number values(6, 4, 4.5, '4');
+insert into jt_number values(7, 10, 2, '10');
+insert into jt_number values(8, 2, 10, '2');
+insert into jt_number values(9, 99, 100, '99');
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt < jt_number.age and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt > jt_number.age and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt = jt_number.age and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt <= jt_number.score and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt >= jt_number.score and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt <> jt_number.score and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_number.age > jt_text.txt and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_number.age < jt_text.txt and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_number.age = jt_text.txt and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_number.score >= jt_text.txt and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_number.score <= jt_text.txt and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_number.score <> jt_text.txt and jt_text.id = jt_number.id;
+
+-- echo character pairs keep lexical comparison semantics
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt < jt_number.num_text and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt > jt_number.num_text and jt_text.id = jt_number.id;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt = jt_number.num_text and jt_text.id = jt_number.id;
+
+-- echo numeric character literals and where predicates use the same promotion
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and jt_text.txt = 0;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and 0 = jt_text.txt;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and jt_text.txt < 2.5;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and 2.5 > jt_text.txt;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and jt_number.age = '2.5tail';
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and '2.5tail' = jt_number.age;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id and '16a' < jt_number.age;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.id = jt_number.id where jt_text.txt < jt_number.age;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt < jt_number.age and jt_text.id = jt_number.id inner join jt_third on jt_number.id = jt_third.id;
+
+-- echo indexed join inputs preserve numeric promotion and text keys
+create index jt_text_txt on jt_text(txt);
+create index jt_number_age on jt_number(age);
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt = jt_number.score and jt_text.id = jt_number.id where jt_number.age >= 0;
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt < jt_number.age and jt_text.id = jt_number.id where jt_text.txt = '2';
+-- sort select jt_text.id from jt_text inner join jt_number on jt_text.txt > jt_number.age and jt_text.id = jt_number.id where jt_number.age = 2;

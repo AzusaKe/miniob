@@ -185,41 +185,42 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
                                      : static_cast<Expression *>(new ValueExpr(filter_obj_right.value)));
 
     if (left->value_type() != right->value_type()) {
+      // A string compared with a number uses its floating-point numeric prefix.
+      // Promote both operands so fractional strings are not truncated to integers.
+      const bool numeric_string_comparison =
+          (left->value_type() == AttrType::CHARS && is_numerical_type(right->value_type())) ||
+          (right->value_type() == AttrType::CHARS && is_numerical_type(left->value_type()));
       auto left_to_right_cost = implicit_cast_cost(left->value_type(), right->value_type());
       auto right_to_left_cost = implicit_cast_cost(right->value_type(), left->value_type());
-      if (left_to_right_cost <= right_to_left_cost && left_to_right_cost != INT32_MAX) {
-        ExprType left_type = left->type();
-        auto cast_expr = make_unique<CastExpr>(std::move(left), right->value_type());
-        if (left_type == ExprType::VALUE) {
-          Value left_val;
-          if (OB_FAIL(rc = cast_expr->try_get_value(left_val)))
-          {
-            LOG_WARN("failed to get value from left child", strrc(rc));
-            return rc;
-          }
-          left = make_unique<ValueExpr>(left_val);
-        } else {
-          left = std::move(cast_expr);
-        }
+      AttrType common_type;
+      if (numeric_string_comparison) {
+        common_type = AttrType::FLOATS;
+      } else if (left_to_right_cost <= right_to_left_cost && left_to_right_cost != INT32_MAX) {
+        common_type = right->value_type();
       } else if (right_to_left_cost < left_to_right_cost && right_to_left_cost != INT32_MAX) {
-        ExprType right_type = right->type();
-        auto cast_expr = make_unique<CastExpr>(std::move(right), left->value_type());
-        if (right_type == ExprType::VALUE) {
-          Value right_val;
-          if (OB_FAIL(rc = cast_expr->try_get_value(right_val)))
-          {
-            LOG_WARN("failed to get value from right child", strrc(rc));
-            return rc;
-          }
-          right = make_unique<ValueExpr>(right_val);
-        } else {
-          right = std::move(cast_expr);
-        }
-
+        common_type = left->value_type();
       } else {
         rc = RC::UNSUPPORTED;
         LOG_WARN("unsupported cast from %s to %s", attr_type_to_string(left->value_type()), attr_type_to_string(right->value_type()));
         return rc;
+      }
+
+      for (auto *operand : {&left, &right}) {
+        if ((*operand)->value_type() == common_type) {
+          continue;
+        }
+        const bool is_constant = (*operand)->type() == ExprType::VALUE;
+        auto cast_expr = make_unique<CastExpr>(std::move(*operand), common_type);
+        if (is_constant) {
+          Value value;
+          if (OB_FAIL(rc = cast_expr->try_get_value(value))) {
+            LOG_WARN("failed to cast comparison constant. rc=%s", strrc(rc));
+            return rc;
+          }
+          *operand = make_unique<ValueExpr>(value);
+        } else {
+          *operand = std::move(cast_expr);
+        }
       }
     }
 

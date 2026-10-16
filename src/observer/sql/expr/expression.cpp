@@ -84,6 +84,11 @@ RC CastExpr::cast(const Value &value, Value &cast_value) const
     cast_value = value;
     return rc;
   }
+  // Comparison casts accept numeric prefixes without relaxing stored-value validation.
+  if (value.attr_type() == AttrType::CHARS && cast_type_ == AttrType::FLOATS) {
+    cast_value.set_float(value.get_float());
+    return RC::SUCCESS;
+  }
   rc = Value::cast_to(value, cast_type_, cast_value);
   return rc;
 }
@@ -106,7 +111,12 @@ RC CastExpr::get_column(Chunk &chunk, Column &column)
   if (rc != RC::SUCCESS) {
     return rc;
   }
-  const int result_length = cast_type_ == AttrType::DATES ? sizeof(int) : child_column.attr_len();
+  int result_length = child_column.attr_len();
+  if (cast_type_ == AttrType::INTS || cast_type_ == AttrType::DATES) {
+    result_length = sizeof(int);
+  } else if (cast_type_ == AttrType::FLOATS) {
+    result_length = sizeof(float);
+  }
   column.init(cast_type_, result_length);
   for (int i = 0; i < child_column.count(); ++i) {
     Value value = child_column.get_value(i);

@@ -22,6 +22,58 @@ See the Mulan PSL v2 for more details. */
 using namespace std;
 using namespace common;
 
+TEST(CastExpr, NumericStringPrefixes)
+{
+  const struct
+  {
+    const char *text;
+    float expected;
+  } cases[] = {
+      {"16a", 16.0f}, {"16.5tail", 16.5f}, {"abc", 0.0f}, {"", 0.0f},
+      {"2.5", 2.5f}, {" -3.25x", -3.25f}, {"1e2tail", 100.0f},
+  };
+  for (const auto &test : cases) {
+    SCOPED_TRACE(test.text);
+    CastExpr expression(make_unique<ValueExpr>(Value(test.text)), AttrType::FLOATS);
+    Value result;
+    ASSERT_EQ(RC::SUCCESS, expression.try_get_value(result));
+    EXPECT_EQ(AttrType::FLOATS, result.attr_type());
+    EXPECT_FLOAT_EQ(test.expected, result.get_float());
+  }
+}
+
+TEST(CastExpr, NumericStringColumnsUseFloatWidth)
+{
+  for (int width : {2, 32}) {
+    SCOPED_TRACE(width);
+    const vector<const char *> inputs = width == 2 ? vector<const char *>{"2", "x", ""}
+                                                 : vector<const char *>{"16a", "2.5tail", "abc"};
+    const vector<float> expected = width == 2 ? vector<float>{2.0f, 0.0f, 0.0f}
+                                            : vector<float>{16.0f, 2.5f, 0.0f};
+    auto strings = make_unique<Column>(AttrType::CHARS, width, inputs.size());
+    for (const char *text : inputs) {
+      ASSERT_EQ(RC::SUCCESS, strings->append_value(Value(text)));
+    }
+    Chunk chunk;
+    chunk.add_column(std::move(strings), 0);
+    FieldMeta meta("text", AttrType::CHARS, 0, width, true, 0);
+    auto expression = make_unique<CastExpr>(make_unique<FieldExpr>(Field(nullptr, &meta)), AttrType::FLOATS);
+    Column result;
+    ASSERT_EQ(RC::SUCCESS, expression->get_column(chunk, result));
+    EXPECT_EQ(sizeof(float), static_cast<size_t>(result.attr_len()));
+    ASSERT_EQ(expected.size(), static_cast<size_t>(result.count()));
+    for (size_t i = 0; i < expected.size(); i++) {
+      EXPECT_FLOAT_EQ(expected[i], result.get_value(i).get_float());
+    }
+    ComparisonExpr comparison(LESS_THAN, std::move(expression), make_unique<ValueExpr>(Value(2.6f)));
+    vector<uint8_t> selected(inputs.size(), 1);
+    ASSERT_EQ(RC::SUCCESS, comparison.eval(chunk, selected));
+    for (size_t i = 0; i < expected.size(); i++) {
+      EXPECT_EQ(expected[i] < 2.6f, selected[i] != 0);
+    }
+  }
+}
+
 TEST(ConjunctionSimplification, DecisiveConstantAfterComparison)
 {
   for (auto type : {ConjunctionExpr::Type::AND, ConjunctionExpr::Type::OR}) {
