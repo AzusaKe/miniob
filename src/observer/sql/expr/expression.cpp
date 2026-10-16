@@ -106,7 +106,8 @@ RC CastExpr::get_column(Chunk &chunk, Column &column)
   if (rc != RC::SUCCESS) {
     return rc;
   }
-  column.init(cast_type_, child_column.attr_len());
+  const int result_length = cast_type_ == AttrType::DATES ? sizeof(int) : child_column.attr_len();
+  column.init(cast_type_, result_length);
   for (int i = 0; i < child_column.count(); ++i) {
     Value value = child_column.get_value(i);
     Value cast_value;
@@ -238,7 +239,7 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     LOG_WARN("cannot compare columns with different types");
     return RC::INTERNAL;
   }
-  if (left_column.attr_type() == AttrType::INTS) {
+  if (left_column.attr_type() == AttrType::INTS || left_column.attr_type() == AttrType::DATES) {
     rc = compare_column<int>(left_column, right_column, select);
   } else if (left_column.attr_type() == AttrType::FLOATS) {
     rc = compare_column<float>(left_column, right_column, select);

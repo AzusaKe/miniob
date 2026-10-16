@@ -19,6 +19,11 @@ See the Mulan PSL v2 for more details. */
 
 RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt *&stmt)
 {
+  for (const AttrInfoSqlNode &attr : create_table.attr_infos) {
+    if (attr.type == AttrType::DATES && attr.length != sizeof(int32_t)) {
+      return RC::INVALID_ARGUMENT;
+    }
+  }
   StorageFormat storage_format = get_storage_format(create_table.storage_format.c_str());
   if (storage_format == StorageFormat::UNKNOWN_FORMAT) {
     return RC::INVALID_ARGUMENT;

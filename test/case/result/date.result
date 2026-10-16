@@ -1,0 +1,118 @@
+DATE METADATA AND INVALID PREDICATES ON AN EMPTY TABLE
+create table date_bad_length(d date(1));
+FAILURE
+create table date_bad_length(d date(8));
+FAILURE
+create table date_case(id int, birthday date, next_day date, label char(16));
+SUCCESS
+desc date_case;
+FIELD | TYPE | LENGTH
+ID | INTS | 4
+BIRTHDAY | DATES | 4
+NEXT_DAY | DATES | 4
+LABEL | CHARS | 16
+select * from date_case where birthday = '1900-2-29';
+FAILURE
+select * from date_case where '2100-2-29' < birthday;
+FAILURE
+
+VALID DATES AND CHARACTER VALUES
+insert into date_case values(1, '1969-12-31', '1970-1-1', '2020-1-1');
+SUCCESS
+insert into date_case values(2, '2038-2-1', '2038-1-20', '2017-2-29');
+SUCCESS
+insert into date_case values(3, '2000-2-29', '2000-02-29', '0000-00-00');
+SUCCESS
+insert into date_case values(4, '2400-2-29', '2400-3-1', '9999-13-32');
+SUCCESS
+insert into date_case values(5, '1900-2-28', '1900-3-1', '1900-2-29');
+SUCCESS
+insert into date_case values(6, '2100-2-28', '2100-3-1', '2100-2-29');
+SUCCESS
+
+INVALID CALENDAR DATES DO NOT INSERT ROWS
+insert into date_case values(10, '1900-2-29', '2000-1-1', 'invalid');
+FAILURE
+insert into date_case values(11, '2000-2-30', '2000-1-1', 'invalid');
+FAILURE
+insert into date_case values(12, '2100-2-29', '2000-1-1', 'invalid');
+FAILURE
+insert into date_case values(13, '2400-2-30', '2000-1-1', 'invalid');
+FAILURE
+insert into date_case values(14, '2020-13-1', '2000-1-1', 'invalid');
+FAILURE
+select * from date_case;
+1 | 1969-12-31 | 1970-01-01 | 2020-1-1
+2 | 2038-02-01 | 2038-01-20 | 2017-2-29
+3 | 2000-02-29 | 2000-02-29 | 0000-00-00
+4 | 2400-02-29 | 2400-03-01 | 9999-13-32
+5 | 1900-02-28 | 1900-03-01 | 1900-2-29
+6 | 2100-02-28 | 2100-03-01 | 2100-2-29
+ID | BIRTHDAY | NEXT_DAY | LABEL
+
+FIELD COMPARISONS AND BOTH PREDICATE DIRECTIONS
+select id from date_case where birthday < next_day;
+1
+4
+5
+6
+ID
+select id from date_case where birthday > '2038-1-20';
+2
+4
+6
+ID
+select id from date_case where '2038-1-20' < birthday;
+2
+4
+6
+ID
+select id from date_case where birthday = '2000-02-29';
+ID
+3
+
+INDEXED EQUALITY AND INEQUALITY
+create index date_case_birthday on date_case(birthday);
+SUCCESS
+select id from date_case where birthday = '2000-2-29';
+ID
+3
+select id from date_case where '2000-2-29' = birthday;
+ID
+3
+select id from date_case where birthday != '2000-2-29';
+1
+2
+4
+5
+6
+ID
+select id from date_case where '2000-2-29' != birthday;
+1
+2
+4
+5
+6
+ID
+
+CHARACTER VALUES RETAIN THEIR ORIGINAL TEXT
+select label from date_case where label = '2017-2-29';
+LABEL
+2017-2-29
+select label from date_case where label = '2017-02-29';
+LABEL
+
+INDEXED DELETE AND REMAINING DATES
+delete from date_case where birthday < '1970-1-1';
+SUCCESS
+select * from date_case;
+2 | 2038-02-01 | 2038-01-20 | 2017-2-29
+3 | 2000-02-29 | 2000-02-29 | 0000-00-00
+4 | 2400-02-29 | 2400-03-01 | 9999-13-32
+6 | 2100-02-28 | 2100-03-01 | 2100-2-29
+ID | BIRTHDAY | NEXT_DAY | LABEL
+select id from date_case where birthday <= '2100-02-28';
+2
+3
+6
+ID
