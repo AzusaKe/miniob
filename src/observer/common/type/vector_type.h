@@ -19,14 +19,20 @@ See the Mulan PSL v2 for more details. */
 class VectorType : public DataType
 {
 public:
+  static constexpr int DEFAULT_DIMENSIONS = 2048;
+  static constexpr int MAX_DIMENSIONS = 16383;
+  // Two int64 values: byte offset in the LOB file and binary payload length.
+  static constexpr int STORAGE_SIZE = 16;
+
   VectorType() : DataType(AttrType::VECTORS) {}
   virtual ~VectorType() {}
 
-  int compare(const Value &left, const Value &right) const override { return INT32_MAX; }
+  int compare(const Value &left, const Value &right) const override;
 
   RC add(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
   RC subtract(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
   RC multiply(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
 
-  RC to_string(const Value &val, string &result) const override { return RC::UNIMPLEMENTED; }
+  RC to_string(const Value &val, string &result) const override;
+  RC set_value_from_str(Value &val, const string &data) const override;
 };

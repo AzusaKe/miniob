@@ -52,6 +52,10 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
       return rc;
     }
   }
+  if (field_meta->type() == AttrType::VECTORS &&
+      (value.get_vector().empty() || static_cast<int>(value.get_vector().size()) > field_meta->vector_dim())) {
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+  }
 
   unordered_map<string, Table *> table_map;
   table_map.emplace(update.relation_name, table);

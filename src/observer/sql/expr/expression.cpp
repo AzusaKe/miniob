@@ -152,6 +152,11 @@ ComparisonExpr::~ComparisonExpr() {}
 
 RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &result) const
 {
+  if (left.attr_type() == AttrType::VECTORS || right.attr_type() == AttrType::VECTORS) {
+    if (left.attr_type() != AttrType::VECTORS || right.attr_type() != AttrType::VECTORS || comp_ != EQUAL_TO) {
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+  }
   RC  rc         = RC::SUCCESS;
   int cmp_result = left.compare(right);
   result         = false;
@@ -349,7 +354,8 @@ bool ArithmeticExpr::equal(const Expression &other) const
   }
   auto &other_arith_expr = static_cast<const ArithmeticExpr &>(other);
   return arithmetic_type_ == other_arith_expr.arithmetic_type() && left_->equal(*other_arith_expr.left_) &&
-         right_->equal(*other_arith_expr.right_);
+         ((right_ == nullptr && other_arith_expr.right_ == nullptr) ||
+             (right_ != nullptr && other_arith_expr.right_ != nullptr && right_->equal(*other_arith_expr.right_)));
 }
 AttrType ArithmeticExpr::value_type() const
 {
@@ -369,29 +375,32 @@ AttrType ArithmeticExpr::value_type() const
 RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value, Value &value) const
 {
   RC rc = RC::SUCCESS;
+  if (left_value.attr_type() == AttrType::VECTORS || right_value.attr_type() == AttrType::VECTORS) {
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+  }
 
   const AttrType target_type = value_type();
   value.set_type(target_type);
 
   switch (arithmetic_type_) {
     case Type::ADD: {
-      Value::add(left_value, right_value, value);
+      rc = Value::add(left_value, right_value, value);
     } break;
 
     case Type::SUB: {
-      Value::subtract(left_value, right_value, value);
+      rc = Value::subtract(left_value, right_value, value);
     } break;
 
     case Type::MUL: {
-      Value::multiply(left_value, right_value, value);
+      rc = Value::multiply(left_value, right_value, value);
     } break;
 
     case Type::DIV: {
-      Value::divide(left_value, right_value, value);
+      rc = Value::divide(left_value, right_value, value);
     } break;
 
     case Type::NEGATIVE: {
-      Value::negative(left_value, value);
+      rc = Value::negative(left_value, value);
     } break;
 
     default: {
@@ -482,10 +491,12 @@ RC ArithmeticExpr::get_value(const Tuple &tuple, Value &value) const
     LOG_WARN("failed to get value of left expression. rc=%s", strrc(rc));
     return rc;
   }
-  rc = right_->get_value(tuple, right_value);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
-    return rc;
+  if (right_) {
+    rc = right_->get_value(tuple, right_value);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
+      return rc;
+    }
   }
   return calc_value(left_value, right_value, value);
 }
@@ -505,10 +516,14 @@ RC ArithmeticExpr::get_column(Chunk &chunk, Column &column)
     LOG_WARN("failed to get column of left expression. rc=%s", strrc(rc));
     return rc;
   }
-  rc = right_->get_column(chunk, right_column);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to get column of right expression. rc=%s", strrc(rc));
-    return rc;
+  if (right_) {
+    rc = right_->get_column(chunk, right_column);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get column of right expression. rc=%s", strrc(rc));
+      return rc;
+    }
+  } else {
+    right_column.reference(left_column);
   }
   return calc_column(left_column, right_column, column);
 }

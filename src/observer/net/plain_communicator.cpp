@@ -12,6 +12,8 @@ See the Mulan PSL v2 for more details. */
 // Created by Wangyunlai on 2023/06/25.
 //
 
+#include <algorithm>
+
 #include "net/plain_communicator.h"
 #include "common/io/io.h"
 #include "common/log/log.h"
@@ -30,32 +32,31 @@ PlainCommunicator::PlainCommunicator()
 
 RC PlainCommunicator::read_event(SessionEvent *&event)
 {
-  RC rc = RC::SUCCESS;
-
   event = nullptr;
-
-  int data_len = 0;
-  int read_len = 0;
-
-  const int    max_packet_size = 8192;
-  vector<char> buf(max_packet_size);
+  size_t data_len = 0;
+  constexpr size_t max_packet_size = 16 * 1024 * 1024;
+  vector<char> buf(8192);
 
   // 持续接收消息，直到遇到'\0'。将'\0'遇到的后续数据直接丢弃没有处理，因为目前仅支持一收一发的模式
   while (true) {
-    read_len = ::read(fd_, buf.data() + data_len, max_packet_size - data_len);
+    if (data_len == buf.size()) {
+      if (buf.size() == max_packet_size) {
+        LOG_WARN("The length of sql exceeds the limitation %zu", max_packet_size);
+        return RC::IOERR_TOO_LONG;
+      }
+      buf.resize(std::min(buf.size() * 2, max_packet_size));
+    }
+    ssize_t read_len = ::read(fd_, buf.data() + data_len, buf.size() - data_len);
     if (read_len < 0) {
-      if (errno == EAGAIN) {
+      if (errno == EAGAIN || errno == EINTR) {
         continue;
       }
-      break;
+      LOG_ERROR("Failed to read socket of %s, %s", addr(), strerror(errno));
+      return RC::IOERR_READ;
     }
     if (read_len == 0) {
-      break;
-    }
-
-    if (read_len + data_len > max_packet_size) {
-      data_len += read_len;
-      break;
+      LOG_INFO("The peer has been closed %s", addr());
+      return RC::IOERR_CLOSE;
     }
 
     bool msg_end = false;
@@ -74,22 +75,10 @@ RC PlainCommunicator::read_event(SessionEvent *&event)
     data_len += read_len;
   }
 
-  if (data_len > max_packet_size) {
-    LOG_WARN("The length of sql exceeds the limitation %d", max_packet_size);
-    return RC::IOERR_TOO_LONG;
-  }
-  if (read_len == 0) {
-    LOG_INFO("The peer has been closed %s", addr());
-    return RC::IOERR_CLOSE;
-  } else if (read_len < 0) {
-    LOG_ERROR("Failed to read socket of %s, %s", addr(), strerror(errno));
-    return RC::IOERR_READ;
-  }
-
-  LOG_INFO("receive command(size=%d): %s", data_len, buf.data());
+  LOG_INFO("receive command(size=%zu): %s", data_len, buf.data());
   event = new SessionEvent(this);
   event->set_query(string(buf.data()));
-  return rc;
+  return RC::SUCCESS;
 }
 
 RC PlainCommunicator::write_state(SessionEvent *event, bool &need_disconnect)
@@ -159,22 +148,47 @@ RC PlainCommunicator::write_debug(SessionEvent *request, bool &need_disconnect)
 
 RC PlainCommunicator::write_result(SessionEvent *event, bool &need_disconnect)
 {
-  RC rc = write_result_internal(event, need_disconnect);
-  if (!need_disconnect) {
-    RC rc1 = write_debug(event, need_disconnect);
-    if (OB_FAIL(rc1)) {
-      LOG_WARN("failed to send debug info to client. rc=%s, err=%s", strrc(rc), strerror(errno));
-    }
+  need_disconnect = true;
+  RC rc = writer_->begin_staging();
+  if (OB_FAIL(rc)) {
+    return rc;
   }
-  if (!need_disconnect) {
-    rc = writer_->writen(send_message_delimiter_.data(), send_message_delimiter_.size());
+
+  rc = write_result_internal(event, need_disconnect);
+  if (OB_FAIL(rc)) {
+    // An expression can fail after the header and earlier rows were formatted.
+    // Replace that entire response with a failure while preserving the socket.
+    writer_->discard_staging();
+    SqlResult *sql_result = event->sql_result();
+    if (sql_result->has_operator()) {
+      sql_result->close();
+    }
+    sql_result->set_return_code(rc);
+    sql_result->set_state_string("");
+    rc = writer_->begin_staging();
     if (OB_FAIL(rc)) {
-      LOG_ERROR("Failed to send data back to client. ret=%s, error=%s", strrc(rc), strerror(errno));
       need_disconnect = true;
       return rc;
     }
+    rc = write_state(event, need_disconnect);
   }
-  writer_->flush();  // TODO handle error
+
+  if (OB_SUCC(rc)) {
+    rc = write_debug(event, need_disconnect);
+  }
+  if (OB_SUCC(rc)) {
+    rc = writer_->writen(send_message_delimiter_.data(), send_message_delimiter_.size());
+  }
+  if (OB_FAIL(rc)) {
+    writer_->discard_staging();
+    need_disconnect = true;
+    return rc;
+  }
+  rc = writer_->commit_staging();
+  if (OB_SUCC(rc)) {
+    rc = writer_->flush();
+  }
+  need_disconnect = OB_FAIL(rc);
   return rc;
 }
 
@@ -203,7 +217,7 @@ RC PlainCommunicator::write_result_internal(SessionEvent *event, bool &need_disc
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
-    if (nullptr != alias || alias[0] != 0) {
+    if (nullptr != alias && alias[0] != 0) {
       if (0 != i) {
         const char *delim = " | ";
 

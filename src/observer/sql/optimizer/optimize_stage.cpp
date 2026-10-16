@@ -23,6 +23,8 @@ See the Mulan PSL v2 for more details. */
 #include "event/session_event.h"
 #include "event/sql_event.h"
 #include "sql/operator/logical_operator.h"
+#include "sql/operator/table_get_logical_operator.h"
+#include "sql/expr/expression_iterator.h"
 #include "sql/stmt/stmt.h"
 #include "sql/optimizer/cascade/optimizer.h"
 #include "sql/optimizer/optimizer_utils.h"
@@ -90,19 +92,44 @@ RC OptimizeStage::generate_physical_plan(
     unique_ptr<LogicalOperator> &logical_operator, unique_ptr<PhysicalOperator> &physical_operator, Session *session)
 {
   RC rc = RC::SUCCESS;
-  function<bool(LogicalOperator &)> contains_join = [&](LogicalOperator &oper) {
+  function<bool(Expression &)> needs_tuple_expression = [&](Expression &expr) {
+    if (expr.type() == ExprType::VECTOR_FUNCTION || expr.value_type() == AttrType::VECTORS) {
+      return true;
+    }
+    bool found = false;
+    ExpressionIterator::iterate_child_expr(expr, [&](unique_ptr<Expression> &child) {
+      if (child && needs_tuple_expression(*child)) {
+        found = true;
+      }
+      return RC::SUCCESS;
+    });
+    return found;
+  };
+  function<bool(LogicalOperator &)> needs_tuple = [&](LogicalOperator &oper) {
     if (oper.type() == LogicalOperatorType::JOIN) {
       return true;
     }
+    if (oper.type() == LogicalOperatorType::TABLE_GET) {
+      for (const auto &field : *static_cast<TableGetLogicalOperator &>(oper).table()->table_meta().field_metas()) {
+        if (field.type() == AttrType::VECTORS) {
+          return true;
+        }
+      }
+    }
+    for (auto &expr : oper.expressions()) {
+      if (needs_tuple_expression(*expr)) {
+        return true;
+      }
+    }
     for (auto &child : oper.children()) {
-      if (contains_join(*child)) {
+      if (needs_tuple(*child)) {
         return true;
       }
     }
     return false;
   };
   if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
-      LogicalOperator::can_generate_vectorized_operator(logical_operator->type()) && !contains_join(*logical_operator)) {
+      LogicalOperator::can_generate_vectorized_operator(logical_operator->type()) && !needs_tuple(*logical_operator)) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
     rc    = physical_plan_generator_.create_vec(*logical_operator, physical_operator, session);

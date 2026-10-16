@@ -29,6 +29,7 @@ BufferedWriter::~BufferedWriter() { close(); }
 
 RC BufferedWriter::close()
 {
+  discard_staging();
   if (fd_ < 0) {
     return RC::SUCCESS;
   }
@@ -45,8 +46,19 @@ RC BufferedWriter::close()
 
 RC BufferedWriter::write(const char *data, int32_t size, int32_t &write_size)
 {
-  if (fd_ < 0) {
+  write_size = 0;
+  if (fd_ < 0 || size < 0 || (size > 0 && data == nullptr)) {
     return RC::INVALID_ARGUMENT;
+  }
+  if (size == 0) {
+    return RC::SUCCESS;
+  }
+  if (staging_) {
+    RC rc = write_staged(data, size);
+    if (OB_SUCC(rc)) {
+      write_size = size;
+    }
+    return rc;
   }
 
   if (buffer_.remain() == 0) {
@@ -61,7 +73,7 @@ RC BufferedWriter::write(const char *data, int32_t size, int32_t &write_size)
 
 RC BufferedWriter::writen(const char *data, int32_t size)
 {
-  if (fd_ < 0) {
+  if (fd_ < 0 || size < 0 || (size > 0 && data == nullptr)) {
     return RC::INVALID_ARGUMENT;
   }
 
@@ -85,12 +97,96 @@ RC BufferedWriter::flush()
   if (fd_ < 0) {
     return RC::INVALID_ARGUMENT;
   }
+  if (staging_) {
+    return RC::SUCCESS;
+  }
 
   RC rc = RC::SUCCESS;
   while (OB_SUCC(rc) && buffer_.size() > 0) {
     rc = flush_internal(buffer_.size());
   }
   return rc;
+}
+
+RC BufferedWriter::begin_staging()
+{
+  if (fd_ < 0 || staging_) {
+    return RC::INVALID_ARGUMENT;
+  }
+  RC rc = flush();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  staging_ = true;
+  return RC::SUCCESS;
+}
+
+RC BufferedWriter::write_staged(const char *data, int32_t size)
+{
+  constexpr size_t memory_limit = 1024 * 1024;
+  if (staged_file_ == nullptr && staged_data_.size() + static_cast<size_t>(size) <= memory_limit) {
+    staged_data_.insert(staged_data_.end(), data, data + size);
+    return RC::SUCCESS;
+  }
+
+  if (staged_file_ == nullptr) {
+    staged_file_ = std::tmpfile();
+    if (staged_file_ == nullptr) {
+      return RC::IOERR_WRITE;
+    }
+    if (!staged_data_.empty()
+        && std::fwrite(staged_data_.data(), 1, staged_data_.size(), staged_file_) != staged_data_.size()) {
+      return RC::IOERR_WRITE;
+    }
+    staged_data_.clear();
+  }
+  if (std::fwrite(data, 1, size, staged_file_) != static_cast<size_t>(size)) {
+    return RC::IOERR_WRITE;
+  }
+  return RC::SUCCESS;
+}
+
+RC BufferedWriter::commit_staging()
+{
+  if (!staging_) {
+    return RC::INVALID_ARGUMENT;
+  }
+  RC rc = RC::SUCCESS;
+  if (staged_file_ != nullptr) {
+    if (std::fflush(staged_file_) != 0 || std::fseek(staged_file_, 0, SEEK_SET) != 0) {
+      discard_staging();
+      return RC::IOERR_READ;
+    }
+    staging_ = false;
+    char replay_buffer[16384];
+    size_t read_size;
+    while ((read_size = std::fread(replay_buffer, 1, sizeof(replay_buffer), staged_file_)) != 0) {
+      rc = writen(replay_buffer, static_cast<int32_t>(read_size));
+      if (OB_FAIL(rc)) {
+        break;
+      }
+    }
+    if (OB_SUCC(rc) && std::ferror(staged_file_)) {
+      rc = RC::IOERR_READ;
+    }
+  } else {
+    staging_ = false;
+    if (!staged_data_.empty()) {
+      rc = writen(staged_data_.data(), static_cast<int32_t>(staged_data_.size()));
+    }
+  }
+  discard_staging();
+  return rc;
+}
+
+void BufferedWriter::discard_staging()
+{
+  staging_ = false;
+  staged_data_.clear();
+  if (staged_file_ != nullptr) {
+    std::fclose(staged_file_);
+    staged_file_ = nullptr;
+  }
 }
 
 RC BufferedWriter::flush_internal(int32_t size)

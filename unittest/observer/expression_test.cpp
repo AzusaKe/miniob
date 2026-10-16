@@ -131,6 +131,30 @@ TEST(ConjunctionSimplification, AllNeutralConstants)
   }
 }
 
+TEST(ArithmeticExpr, UnaryMinusEvaluatesTuplesAndColumns)
+{
+  ArithmeticExpr expression(ArithmeticExpr::Type::NEGATIVE, make_unique<ValueExpr>(Value(2.5f)), nullptr);
+  ValueListTuple tuple;
+  Value value;
+  ASSERT_EQ(RC::SUCCESS, expression.get_value(tuple, value));
+  EXPECT_FLOAT_EQ(-2.5f, value.get_float());
+  auto copy = expression.copy();
+  EXPECT_TRUE(copy->equal(expression));
+
+  Chunk chunk;
+  auto input = make_unique<Column>(AttrType::INTS, sizeof(int), 3);
+  for (int i = 0; i < 3; i++) {
+    ASSERT_EQ(RC::SUCCESS, input->append_value(Value(i)));
+  }
+  chunk.add_column(std::move(input), 0);
+  Column result;
+  ASSERT_EQ(RC::SUCCESS, expression.get_column(chunk, result));
+  ASSERT_EQ(3, result.count());
+  for (int i = 0; i < 3; i++) {
+    EXPECT_FLOAT_EQ(-2.5f, result.get_value(i).get_float());
+  }
+}
+
 TEST(ArithmeticExpr, test_value_type)
 {
   Value int_value1(1);

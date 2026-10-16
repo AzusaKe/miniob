@@ -14,6 +14,8 @@ See the Mulan PSL v2 for more details. */
 
 #include <limits.h>
 #include <string.h>
+#include <cmath>
+#include <limits>
 
 #include "common/defs.h"
 #include "common/lang/string.h"
@@ -21,6 +23,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/algorithm.h"
 #include "common/log/log.h"
 #include "common/global_context.h"
+#include "common/type/vector_type.h"
 #include "storage/db/db.h"
 #include "storage/buffer/disk_buffer_pool.h"
 #include "storage/common/condition_filter.h"
@@ -41,6 +44,24 @@ Table::~Table()
     delete lob_handler_;
     lob_handler_ = nullptr;
   }
+}
+
+RC Table::init_lob_handler(const char *base_dir, bool create)
+{
+  bool has_vectors = false;
+  for (int i = 0; i < table_meta_.field_num(); ++i) {
+    has_vectors |= table_meta_.field(i)->type() == AttrType::VECTORS;
+  }
+  if (!has_vectors) {
+    return RC::SUCCESS;
+  }
+  auto handler = make_unique<LobFileHandler>();
+  const string path = table_lob_file(base_dir, name());
+  RC rc = create ? handler->create_file(path.c_str()) : handler->open_file(path.c_str());
+  if (rc == RC::SUCCESS) {
+    lob_handler_ = handler.release();
+  }
+  return rc;
 }
 
 RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, const char *base_dir,
@@ -98,6 +119,11 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
 
   db_       = db;
 
+  rc = init_lob_handler(base_dir, true);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+
   string             data_file = table_data_file(base_dir, name);
   BufferPoolManager &bpm       = db->buffer_pool_manager();
   rc                           = bpm.create_file(data_file.c_str());
@@ -152,6 +178,11 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   //   return rc;
   // }
   RC rc = RC::SUCCESS;
+
+  rc = init_lob_handler(base_dir, false);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
 
   if (table_meta_.storage_engine() == StorageEngine::HEAP) {
     engine_ = make_unique<HeapTableEngine>(&table_meta_, db_, this);
@@ -220,6 +251,21 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
   }
 
   const int normal_field_start_index = table_meta_.sys_field_num();
+  // VECTOR(N) is a capacity: reject empty/oversized vectors before writing LOBs.
+  for (int i = 0; i < value_num; ++i) {
+    const FieldMeta *field = table_meta_.field(i + normal_field_start_index);
+    if (field->type() == AttrType::VECTORS) {
+      if (values[i].attr_type() != AttrType::VECTORS || values[i].get_vector().empty() ||
+          static_cast<int>(values[i].get_vector().size()) > field->vector_dim()) {
+        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+      }
+      for (float element : values[i].get_vector()) {
+        if (!std::isfinite(element)) {
+          return RC::INVALID_ARGUMENT;
+        }
+      }
+    }
+  }
   // 复制所有字段的值
   int   record_size = table_meta_.record_size();
   char *record_data = (char *)malloc(record_size);
@@ -253,6 +299,25 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
 
 RC Table::set_value_to_record(char *record_data, const Value &value, const FieldMeta *field)
 {
+  if (field->type() == AttrType::VECTORS) {
+    if (lob_handler_ == nullptr || value.attr_type() != AttrType::VECTORS || value.get_vector().empty() ||
+        static_cast<int>(value.get_vector().size()) > field->vector_dim() ||
+        field->len() != VectorType::STORAGE_SIZE) {
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+    for (float element : value.get_vector()) {
+      if (!std::isfinite(element)) {
+        return RC::INVALID_ARGUMENT;
+      }
+    }
+    int64_t descriptor[2] = {0, value.length()};
+    RC rc = lob_handler_->insert_data(descriptor[0], descriptor[1], value.data());
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    memcpy(record_data + field->offset(), descriptor, sizeof(descriptor));
+    return RC::SUCCESS;
+  }
   size_t       copy_len = field->len();
   const size_t data_len = value.length();
   if (field->type() == AttrType::CHARS) {
@@ -261,6 +326,34 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     }
   }
   memcpy(record_data + field->offset(), value.data(), copy_len);
+  return RC::SUCCESS;
+}
+
+RC Table::get_value_from_record(const char *record_data, const FieldMeta &field, Value &value) const
+{
+  if (field.type() == AttrType::VECTORS) {
+    if (lob_handler_ == nullptr || field.len() != VectorType::STORAGE_SIZE || field.vector_dim() < 1 ||
+        field.vector_dim() > VectorType::MAX_DIMENSIONS) {
+      return RC::INTERNAL;
+    }
+    int64_t descriptor[2];
+    memcpy(descriptor, record_data + field.offset(), sizeof(descriptor));
+    if (descriptor[0] < 0 || descriptor[1] <= 0 || descriptor[1] % sizeof(float) != 0 ||
+        descriptor[1] > static_cast<int64_t>(field.vector_dim() * sizeof(float)) ||
+        descriptor[0] > std::numeric_limits<int64_t>::max() - descriptor[1]) {
+      return RC::INTERNAL;
+    }
+    vector<float> elements(descriptor[1] / sizeof(float));
+    RC rc = lob_handler_->get_data(descriptor[0], descriptor[1], reinterpret_cast<char *>(elements.data()));
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    value.set_vector(elements);
+    return RC::SUCCESS;
+  }
+  value.reset();
+  value.set_type(field.type());
+  value.set_data(record_data + field.offset(), field.len());
   return RC::SUCCESS;
 }
 
@@ -276,6 +369,9 @@ RC Table::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode m
 
 RC Table::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name)
 {
+  if (field_meta != nullptr && field_meta->type() == AttrType::VECTORS) {
+    return RC::UNSUPPORTED;
+  }
   return engine_->create_index(trx, field_meta, index_name);
 }
 
@@ -295,5 +391,11 @@ Index *Table::find_index_by_field(const char *field_name) const
 
 RC Table::sync()
 {
+  if (lob_handler_ != nullptr) {
+    RC rc = lob_handler_->sync();
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+  }
   return engine_->sync();
 }

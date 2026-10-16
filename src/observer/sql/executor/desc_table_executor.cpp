@@ -53,7 +53,8 @@ RC DescTableExecutor::execute(SQLStageEvent *sql_event)
     const TableMeta &table_meta = table->table_meta();
     for (int i = table_meta.sys_field_num(); i < table_meta.field_num(); i++) {
       const FieldMeta *field_meta = table_meta.field(i);
-      oper->append({field_meta->name(), attr_type_to_string(field_meta->type()), to_string(field_meta->len())});
+      const int length = field_meta->type() == AttrType::VECTORS ? field_meta->vector_dim() : field_meta->len();
+      oper->append({field_meta->name(), attr_type_to_string(field_meta->type()), to_string(length)});
     }
 
     sql_result->set_operator(unique_ptr<PhysicalOperator>(oper));

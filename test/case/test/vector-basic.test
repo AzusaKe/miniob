@@ -1,0 +1,130 @@
+-- echo vector dimensions and table creation
+create table vb_bad(v vector(0));
+create table vb_bad(v vector(-1));
+create table vb_bad(v vector(16384));
+create table vb_bad(v vector(4294967299));
+create table vb_bad(v vector());
+create table vb_bad(v vector(3), primary key(v));
+create table vb_default(v vector);
+insert into vb_default values(string_to_vector('[1,2,3]'));
+select vector_to_string(v) as default_vec from vb_default;
+drop table vb_default;
+create table vb_max(v vector(16383));
+drop table vb_max;
+create table vb_capacity(id int, v vector(3));
+insert into vb_capacity values(1, string_to_vector('[1,2]'));
+insert into vb_capacity values(2, string_to_vector('[3]'));
+-- sort select id, vector_to_string(v) as actual_size from vb_capacity;
+update vb_capacity set v = string_to_vector('[9]') where id = 1;
+-- sort select id, vector_to_string(v) as resized from vb_capacity;
+update vb_capacity set v = string_to_vector('[1,2,3,4]') where id = 1;
+select vector_to_string(v) as unchanged from vb_capacity where id = 1;
+drop table vb_capacity;
+create table vb(id int, v1 vector(3), v2 vector(3), metric char(16), label char(16));
+insert into vb values(1, string_to_vector('[1, 2, 3]'), string_to_vector('[4,6,3]'), 'EUCLIDEAN', 'first');
+insert into vb values(2, string_to_vector(' [ -1e0, +0.0, 1. ] '), string_to_vector('[1,0,-1]'), 'DOT', 'second');
+insert into vb values(3, string_to_vector('[0,0,0]'), string_to_vector('[0,0,0]'), 'EUCLIDEAN', 'zero');
+
+-- echo conversion functions aliases and constant selects
+select vector_to_string(string_to_vector('[1,-2.5,0.125,0]')) as formatted;
+select from_vector(to_vector('[1, 2, 3]')) as synonym;
+select vector_to_string(string_to_vector(vector_to_string(string_to_vector('[1.25, -0.5, 100]')))) as round_trip;
+select distance(string_to_vector('[1,2,3]'), string_to_vector('[4,6,3]'), 'EUCLIDEAN') as euclidean;
+select distance(string_to_vector('[1,2,3]'), string_to_vector('[4,-2,1]'), 'DOT') as dot_product;
+select distance(string_to_vector('[1,0]'), string_to_vector('[0,1]'), 'COSINE') as cosine;
+select distance(string_to_vector('[1,0]'), string_to_vector('[-1,0]'), 'cosine') as opposite;
+select vector_distance(to_vector('[3,4]'), to_vector('[6,8]'), 'COSINE') as parallel;
+select 2 + distance(string_to_vector('[3,4]'), string_to_vector('[0,0]'), 'euclidean') as arithmetic;
+select vector_to_string(string_to_vector('[.5,2.,+1E2]')) as decimals;
+
+-- echo column conversion multiple vectors and all distance methods
+-- sort select id, vector_to_string(v1) as first_vec, vector_to_string(v2) as second_vec, label from vb;
+-- sort select id, distance(v1, v2, 'EUCLIDEAN') as euclidean, distance(v1, v2, 'DOT') as dot_product from vb;
+select distance(v1, string_to_vector('[1,2,3]'), 'COSINE') as same_direction from vb where id = 1;
+select -distance(v1, v2, 'DOT') as neg from vb where id = 1;
+-- sort select id, distance(v1, v2, metric) as chosen_distance from vb;
+select vector_to_string(string_to_vector(label)) as parsed_text from vb where id = 99;
+-- sort select id from vb where v1 = v1;
+select id from vb where v1 = v2;
+select id from vb where v1 = string_to_vector('[1,2,3]');
+select id from vb where string_to_vector('[-1,0,1]') = v1;
+
+-- echo invalid vector values never add rows
+insert into vb values(99, '[1,2,3]', string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, 1, string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, string_to_vector('[1,2,3,4]'), string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, string_to_vector('[]'), string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, string_to_vector('[1,,2]'), string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, string_to_vector('[1,2,]'), string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, string_to_vector('[NaN,0,1]'), string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+insert into vb values(99, string_to_vector('[1e999,0,1]'), string_to_vector('[1,2,3]'), 'DOT', 'invalid');
+-- sort select id from vb;
+
+-- echo invalid function arguments formats and distance metrics fail
+select vector_to_string(string_to_vector('')) as invalid;
+select vector_to_string(string_to_vector('[]')) as invalid;
+select vector_to_string(string_to_vector('[ ]')) as invalid;
+select vector_to_string(string_to_vector('1,2')) as invalid;
+select vector_to_string(string_to_vector('[1')) as invalid;
+select vector_to_string(string_to_vector('[1,]')) as invalid;
+select vector_to_string(string_to_vector('[1 2]')) as invalid;
+select vector_to_string(string_to_vector('[1foo]')) as invalid;
+select vector_to_string(string_to_vector('[1]tail')) as invalid;
+select vector_to_string(string_to_vector('[inf]')) as invalid;
+select vector_to_string(string_to_vector('[-Infinity]')) as invalid;
+select vector_to_string(string_to_vector('[0x1p2]')) as invalid;
+select string_to_vector(1) as invalid;
+select string_to_vector() as invalid;
+select string_to_vector('[1]', '[2]') as invalid;
+select vector_to_string('[1]') as invalid;
+select vector_to_string(1) as invalid;
+select vector_to_string(string_to_vector('[1]'), 1) as invalid;
+select distance(string_to_vector('[1]'), string_to_vector('[2]')) as invalid;
+select distance('[1]', string_to_vector('[2]'), 'DOT') as invalid;
+select distance(string_to_vector('[1]'), '[2]', 'DOT') as invalid;
+select distance(string_to_vector('[1]'), string_to_vector('[2]'), 1) as invalid;
+select distance(string_to_vector('[1]'), string_to_vector('[2]'), 'MANHATTAN') as invalid;
+select distance(string_to_vector('[1]'), string_to_vector('[2]'), '') as invalid;
+select distance(string_to_vector('[1]'), string_to_vector('[2,3]'), 'DOT') as invalid;
+select distance(string_to_vector('[0,0]'), string_to_vector('[1,2]'), 'COSINE') as invalid;
+select distance(v1, v2, 'COSINE') as invalid from vb where id = 3;
+select distance(v1, v2, 'MANHATTAN') as invalid from vb where id = 99;
+select distance(v1, string_to_vector('[1,2]'), 'EUCLIDEAN') as invalid from vb where id = 1;
+select vector_to_string(missing) as invalid from vb;
+select id from vb where v1 < string_to_vector('[1,2,3]');
+select id from vb where v1 <> string_to_vector('[1,2,3]');
+select id from vb where v1 = '[1,2,3]';
+select id from vb where v1 = id;
+select id from vb where id = v1;
+select string_to_vector('[1]') + 1 as invalid;
+select -string_to_vector('[1]') as invalid;
+select v1 + 1 as invalid from vb where id = 99;
+
+-- echo vector updates preserve other columns and validate dimensions
+create index vb_vector_key on vb(v1);
+create index vb_id on vb(id);
+update vb set v1 = string_to_vector('[7,8,9]') where id = 1;
+select id, vector_to_string(v1) as changed, vector_to_string(v2) as preserved, label from vb where id = 1;
+update vb set v1 = string_to_vector('[1,2,3,4]') where id = 1;
+update vb set v1 = '[1,2,3]' where id = 1;
+select vector_to_string(v1) as unchanged from vb where id = 1;
+delete from vb where v1 = string_to_vector('[0,0,0]');
+-- sort select id from vb;
+update vb set v2 = string_to_vector('[3,4,0]');
+-- sort select id, vector_to_string(v2) as changed from vb;
+
+-- echo vector queries use tuple fallback when chunk execution is requested
+set execution_mode='chunk_iterator';
+-- sort select id, distance(v2, string_to_vector('[0,0,0]'), 'EUCLIDEAN') as length from vb;
+set execution_mode='tuple_iterator';
+set use_cascade=1;
+select vector_to_string(v2) as stored from vb where id = 2;
+set use_cascade=0;
+
+-- echo drop and recreate a vector table with a new dimension
+drop table vb;
+create table vb(id int, v vector(1));
+desc vb;
+insert into vb values(1, string_to_vector('[2.5]'));
+select id, vector_to_string(v) as vec from vb;
+drop table vb;

@@ -28,6 +28,10 @@ RC LobFileHandler::open_file(const char *file_name)
 
 RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data)
 {
+  if (length <= 0 || length > INT32_MAX || data == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+  lock_guard<mutex> lock(mutex_);
   RC       rc         = RC::SUCCESS;
   int64_t  out_size   = 0;
   int64_t end_offset = 0;
@@ -40,5 +44,26 @@ RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data
   }
   offset = end_offset;
 
-  return rc;
+  // Persist the payload before its descriptor can enter the record redo log.
+  return file_.sync();
+}
+
+RC LobFileHandler::get_data(int64_t offset, int64_t length, char *data)
+{
+  if (offset < 0 || length <= 0 || length > INT32_MAX || data == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+  lock_guard<mutex> lock(mutex_);
+  int64_t bytes_read = 0;
+  RC rc = file_.read_at(offset, length, data, &bytes_read);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  return bytes_read == length ? RC::SUCCESS : RC::IOERR_READ;
+}
+
+RC LobFileHandler::sync()
+{
+  lock_guard<mutex> lock(mutex_);
+  return file_.sync();
 }

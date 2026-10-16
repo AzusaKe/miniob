@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/index/bplus_tree_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
+#include "storage/trx/trx.h"
 
 
 HeapTableEngine::~HeapTableEngine()
@@ -184,6 +185,15 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
   if (common::is_blank(index_name) || nullptr == field_meta) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or attribute_name is blank", table_meta_->name());
     return RC::INVALID_ARGUMENT;
+  }
+
+  // DDL does not open a SqlResult operator, so its transaction may not have a
+  // snapshot yet. Start it before scanning or MVCC would hide committed rows.
+  if (trx != nullptr) {
+    RC rc = trx->start_if_need();
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
   }
 
   IndexMeta new_index_meta;

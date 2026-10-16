@@ -184,6 +184,12 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
                                      ? static_cast<Expression *>(new FieldExpr(filter_obj_right.field))
                                      : static_cast<Expression *>(new ValueExpr(filter_obj_right.value)));
 
+    if (left->value_type() == AttrType::VECTORS || right->value_type() == AttrType::VECTORS) {
+      if (left->value_type() != AttrType::VECTORS || right->value_type() != AttrType::VECTORS ||
+          filter_unit->comp() != EQUAL_TO) {
+        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+      }
+    }
     if (left->value_type() != right->value_type()) {
       // A string compared with a number uses its floating-point numeric prefix.
       // Promote both operands so fractional strings are not truncated to integers.

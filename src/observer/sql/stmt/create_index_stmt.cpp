@@ -48,6 +48,9 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
   }
 
   Index *index = table->find_index(create_index.index_name.c_str());
+  if (field_meta->type() == AttrType::VECTORS) {
+    return RC::UNSUPPORTED;
+  }
   if (nullptr != index) {
     LOG_WARN("index with name(%s) already exists. table name=%s", create_index.index_name.c_str(), table_name);
     return RC::SCHEMA_INDEX_NAME_REPEAT;

@@ -78,6 +78,9 @@ public:
    */
   RC make_record(int value_num, const Value *values, Record &record);
 
+  RC set_value_to_record(char *record_data, const Value &value, const FieldMeta *field);
+  RC get_value_from_record(const char *record_data, const FieldMeta &field, Value &value) const;
+
   /**
    * @brief 在当前的表中插入一条记录
    * @details 在表文件和索引中插入关联数据。这里只管在表中插入数据，不关心事务相关操作。
@@ -122,9 +125,7 @@ public:
   RC sync();
 
 private:
-  RC set_value_to_record(char *record_data, const Value &value, const FieldMeta *field);
-
-private:
+  RC init_lob_handler(const char *base_dir, bool create);
   // RC init_record_handler(const char *base_dir);
 
 public:

@@ -14,6 +14,8 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
+#include <cstdio>
+
 #include "net/ring_buffer.h"
 
 /**
@@ -57,6 +59,12 @@ public:
    */
   RC flush();
 
+  /** Stage a complete response until execution succeeds. Large responses spill
+   * to an automatically removed temporary file rather than growing memory. */
+  RC begin_staging();
+  RC commit_staging();
+  void discard_staging();
+
 private:
   /**
    * @brief 刷新缓存
@@ -65,8 +73,12 @@ private:
    * @param size 期望刷新的数据大小
    */
   RC flush_internal(int32_t size);
+  RC write_staged(const char *data, int32_t size);
 
 private:
   int        fd_ = -1;
   RingBuffer buffer_;
+  bool         staging_ = false;
+  vector<char> staged_data_;
+  std::FILE   *staged_file_ = nullptr;
 };

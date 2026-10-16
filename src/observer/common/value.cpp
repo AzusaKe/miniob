@@ -36,6 +36,7 @@ Value::Value(const Value &other)
   this->attr_type_ = other.attr_type_;
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
+  vector_value_   = other.vector_value_;
   switch (this->attr_type_) {
     case AttrType::CHARS: {
       set_string_from_other(other);
@@ -53,6 +54,7 @@ Value::Value(Value &&other)
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
   this->value_     = other.value_;
+  vector_value_   = std::move(other.vector_value_);
   other.own_data_  = false;
   other.length_    = 0;
 }
@@ -66,6 +68,7 @@ Value &Value::operator=(const Value &other)
   this->attr_type_ = other.attr_type_;
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
+  vector_value_   = other.vector_value_;
   switch (this->attr_type_) {
     case AttrType::CHARS: {
       set_string_from_other(other);
@@ -88,6 +91,7 @@ Value &Value::operator=(Value &&other)
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
   this->value_     = other.value_;
+  vector_value_   = std::move(other.vector_value_);
   other.own_data_  = false;
   other.length_    = 0;
   return *this;
@@ -108,6 +112,7 @@ void Value::reset()
   attr_type_ = AttrType::UNDEFINED;
   length_    = 0;
   own_data_  = false;
+  vector_value_.clear();
 }
 
 void Value::set_data(char *data, int length)
@@ -115,6 +120,13 @@ void Value::set_data(char *data, int length)
   switch (attr_type_) {
     case AttrType::CHARS: {
       set_string(data, length);
+    } break;
+    case AttrType::VECTORS: {
+      vector<float> values(length > 0 ? length / sizeof(float) : 0);
+      if (!values.empty()) {
+        memcpy(values.data(), data, values.size() * sizeof(float));
+      }
+      set_vector(values);
     } break;
     case AttrType::INTS:
     case AttrType::DATES: {
@@ -149,6 +161,16 @@ void Value::set_float(float val)
   attr_type_          = AttrType::FLOATS;
   value_.float_value_ = val;
   length_             = sizeof(val);
+}
+
+void Value::set_vector(const vector<float> &values)
+{
+  // Copy before reset so set_vector(value.get_vector()) remains valid.
+  vector<float> copied(values);
+  reset();
+  attr_type_    = AttrType::VECTORS;
+  vector_value_ = std::move(copied);
+  length_       = static_cast<int>(vector_value_.size() * sizeof(float));
 }
 
 void Value::set_date(int val)
@@ -202,7 +224,13 @@ void Value::set_empty_string(int len)
 
 void Value::set_value(const Value &value)
 {
+  if (this == &value) {
+    return;
+  }
   switch (value.attr_type_) {
+    case AttrType::VECTORS: {
+      set_vector(value.get_vector());
+    } break;
     case AttrType::INTS: {
       set_int(value.get_int());
     } break;
@@ -241,6 +269,9 @@ char *Value::data() const
   switch (attr_type_) {
     case AttrType::CHARS: {
       return value_.pointer_value_;
+    } break;
+    case AttrType::VECTORS: {
+      return reinterpret_cast<char *>(const_cast<float *>(vector_value_.data()));
     } break;
     default: {
       return (char *)&value_;

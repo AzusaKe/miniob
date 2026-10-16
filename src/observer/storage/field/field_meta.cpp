@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/string.h"
 #include "common/log/log.h"
 #include "sql/parser/parse_defs.h"
+#include "common/type/vector_type.h"
 
 #include "json/json.h"
 
@@ -25,6 +26,7 @@ const static Json::StaticString FIELD_OFFSET("offset");
 const static Json::StaticString FIELD_LEN("len");
 const static Json::StaticString FIELD_VISIBLE("visible");
 const static Json::StaticString FIELD_FIELD_ID("FIELD_id");
+const static Json::StaticString FIELD_VECTOR_DIM("vector_dim");
 
 FieldMeta::FieldMeta() : attr_type_(AttrType::UNDEFINED), attr_offset_(-1), attr_len_(0), visible_(false), field_id_(0) {}
 
@@ -53,6 +55,7 @@ RC FieldMeta::init(const char *name, AttrType attr_type, int attr_offset, int at
   attr_offset_ = attr_offset;
   visible_     = visible;
   field_id_ = field_id;
+  vector_dim_ = 0;
 
   LOG_INFO("Init a field with name=%s", name);
   return RC::SUCCESS;
@@ -84,6 +87,9 @@ void FieldMeta::to_json(Json::Value &json_value) const
   json_value[FIELD_LEN]     = attr_len_;
   json_value[FIELD_VISIBLE] = visible_;
   json_value[FIELD_FIELD_ID] = field_id_;
+  if (attr_type_ == AttrType::VECTORS) {
+    json_value[FIELD_VECTOR_DIM] = vector_dim_;
+  }
 }
 
 RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
@@ -137,5 +143,17 @@ RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
   int         len     = len_value.asInt();
   bool        visible = visible_value.asBool();
   int         field_id  = field_id_value.asInt();
-  return field.init(name, type, offset, len, visible, field_id);
+  RC rc = field.init(name, type, offset, len, visible, field_id);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  if (type == AttrType::VECTORS) {
+    const Json::Value &dimension = json_value[FIELD_VECTOR_DIM];
+    if (!dimension.isInt() || dimension.asInt() < 1 || dimension.asInt() > VectorType::MAX_DIMENSIONS ||
+        len != VectorType::STORAGE_SIZE) {
+      return RC::INTERNAL;
+    }
+    field.set_vector_dim(dimension.asInt());
+  }
+  return RC::SUCCESS;
 }

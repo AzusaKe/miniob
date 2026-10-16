@@ -13,7 +13,11 @@ See the Mulan PSL v2 for more details. */
 #include <vector>
 
 #include "sql/expr/expression.h"
+#include "sql/expr/expression_iterator.h"
+#include "sql/expr/vector_function_expression.h"
 #include "sql/parser/parse.h"
+#include "sql/stmt/calc_stmt.h"
+#include "sql/stmt/create_table_stmt.h"
 #include "gtest/gtest.h"
 
 using namespace std;
@@ -173,6 +177,175 @@ TEST(ParserTest, comma_join_retains_relation_order)
   EXPECT_EQ(select.relations, (vector<string>{"a", "b", "c"}));
   EXPECT_TRUE(select.joins.empty());
   EXPECT_EQ(select.conditions.size(), 2U);
+}
+
+TEST(ParserTest, vector_dimensions_and_default)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("create table vectors (id int, a vector(0003), b vector, c vector(16383));", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_CREATE_TABLE);
+  const auto &fields = result.sql_nodes()[0]->create_table.attr_infos;
+  ASSERT_EQ(fields.size(), 4U);
+  EXPECT_EQ(fields[1].type, AttrType::VECTORS);
+  EXPECT_EQ(fields[1].length, 3U);
+  EXPECT_EQ(fields[2].length, 2048U);
+  EXPECT_EQ(fields[3].length, 16383U);
+}
+
+TEST(ParserTest, vector_dimension_errors)
+{
+  for (const char *sql : {"create table t (id int, a vector(0));",
+           "create table t (a vector(16384));", "create table t (a vector(4294967299));"}) {
+    SCOPED_TRACE(sql);
+    ParsedSqlResult result;
+    parse(sql, &result);
+    ASSERT_EQ(result.sql_nodes().size(), 1U);
+    ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_CREATE_TABLE);
+    EXPECT_EQ(result.sql_nodes()[0]->create_table.attr_infos.back().length, 0U);
+    Stmt *stmt = nullptr;
+    EXPECT_NE(CreateTableStmt::create(nullptr, result.sql_nodes()[0]->create_table, stmt), RC::SUCCESS);
+    EXPECT_EQ(stmt, nullptr);
+  }
+  for (const char *sql : {"create table t (a vector(-1));", "create table t (a vector());"}) {
+    SCOPED_TRACE(sql);
+    ParsedSqlResult result;
+    parse(sql, &result);
+    ASSERT_EQ(result.sql_nodes().size(), 1U);
+    EXPECT_EQ(result.sql_nodes()[0]->flag, SCF_ERROR);
+  }
+}
+
+TEST(ParserTest, vector_insert_and_update_literals)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("insert into t values (1, string_to_vector('[1, -2.5, 3e-2]'));", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_INSERT);
+  const auto &values = result.sql_nodes()[0]->insertion.values;
+  ASSERT_EQ(values.size(), 2U);
+  EXPECT_EQ(values[1].attr_type(), AttrType::VECTORS);
+  ASSERT_EQ(values[1].get_vector().size(), 3U);
+  EXPECT_FLOAT_EQ(values[1].get_vector()[0], 1.0F);
+  EXPECT_FLOAT_EQ(values[1].get_vector()[1], -2.5F);
+  EXPECT_FLOAT_EQ(values[1].get_vector()[2], 0.03F);
+
+  ParsedSqlResult update;
+  ASSERT_EQ(parse("update t set a = to_vector('[4, 5, 6]') where id = 1;", &update), RC::SUCCESS);
+  ASSERT_EQ(update.sql_nodes().size(), 1U);
+  ASSERT_EQ(update.sql_nodes()[0]->flag, SCF_UPDATE);
+  EXPECT_EQ(update.sql_nodes()[0]->update.value.get_vector(), (vector<float>{4, 5, 6}));
+}
+
+TEST(ParserTest, vector_invalid_literals_remain_semantic_errors)
+{
+  for (const char *literal : {"[]", "[1,]", "[1,,2]", "[NaN]", "[1e999]", "[1]suffix", "abc"}) {
+    string sql = string("insert into t values (1, string_to_vector('") + literal + "'));";
+    SCOPED_TRACE(sql);
+    ParsedSqlResult result;
+    parse(sql.c_str(), &result);
+    ASSERT_EQ(result.sql_nodes().size(), 1U);
+    ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_INSERT);
+    ASSERT_EQ(result.sql_nodes()[0]->insertion.values.size(), 2U);
+    EXPECT_EQ(result.sql_nodes()[0]->insertion.values[1].attr_type(), AttrType::UNDEFINED);
+
+    string update_sql = string("update t set v = string_to_vector('") + literal + "') where id = 1;";
+    ParsedSqlResult update;
+    parse(update_sql.c_str(), &update);
+    ASSERT_EQ(update.sql_nodes().size(), 1U);
+    ASSERT_EQ(update.sql_nodes()[0]->flag, SCF_UPDATE);
+    EXPECT_EQ(update.sql_nodes()[0]->update.value.attr_type(), AttrType::UNDEFINED);
+  }
+}
+
+TEST(ParserTest, vector_function_nested_projection_aliases)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("select id as ident, vector_to_string(c1) as vec_str, "
+                  "distance(c1, string_to_vector('[1, 2, 3]'), 'EUCLIDEAN') as dist_euc from t;",
+      &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_SELECT);
+  const auto &expressions = result.sql_nodes()[0]->selection.expressions;
+  ASSERT_EQ(expressions.size(), 3U);
+  EXPECT_STREQ(expressions[0]->name(), "ident");
+  EXPECT_TRUE(expressions[0]->has_alias());
+  EXPECT_STREQ(expressions[1]->name(), "vec_str");
+  ASSERT_EQ(expressions[2]->type(), ExprType::VECTOR_FUNCTION);
+  auto &distance = static_cast<VectorFunctionExpr &>(*expressions[2]);
+  EXPECT_EQ(distance.function_type(), VectorFunctionExpr::Type::DISTANCE);
+  ASSERT_EQ(distance.children().size(), 3U);
+  EXPECT_EQ(distance.children()[1]->type(), ExprType::VECTOR_FUNCTION);
+  EXPECT_STREQ(distance.name(), "dist_euc");
+}
+
+TEST(ParserTest, vector_select_without_from)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("select vector_distance(to_vector('[1, 2]'), string_to_vector('[4, 6]'), 'EUCLIDEAN') as d, "
+                  "from_vector(to_vector('[1, 2]')) as formatted;", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_CALC);
+  Stmt *raw_stmt = nullptr;
+  ASSERT_EQ(CalcStmt::create(result.sql_nodes()[0]->calc, raw_stmt), RC::SUCCESS);
+  unique_ptr<Stmt> stmt(raw_stmt);
+  auto &expressions = static_cast<CalcStmt &>(*stmt).expressions();
+  ASSERT_EQ(expressions.size(), 2U);
+  EXPECT_STREQ(expressions[0]->name(), "d");
+  Value distance;
+  ASSERT_EQ(expressions[0]->try_get_value(distance), RC::SUCCESS);
+  EXPECT_FLOAT_EQ(distance.get_float(), 5.0F);
+  Value formatted;
+  ASSERT_EQ(expressions[1]->try_get_value(formatted), RC::SUCCESS);
+  EXPECT_EQ(formatted.get_string(), "[1.00000e+00,2.00000e+00]");
+}
+
+TEST(ParserTest, select_without_from_binds_and_validates)
+{
+  for (const char *sql : {"select a;", "select distance(string_to_vector('[1]'), string_to_vector('[1,2]'), 'DOT');",
+           "select string_to_vector('[1,]');", "select vector_to_string(1);",
+           "select string_to_vector('[1]') + 1;", "select 1 - string_to_vector('[1]');",
+           "select -string_to_vector('[1]');", "select distance();",
+           "select vector_to_string();", "select string_to_vector('[1]', '[2]');"}) {
+    SCOPED_TRACE(sql);
+    ParsedSqlResult result;
+    ASSERT_EQ(parse(sql, &result), RC::SUCCESS);
+    ASSERT_EQ(result.sql_nodes().size(), 1U);
+    ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_CALC);
+    Stmt *raw_stmt = nullptr;
+    EXPECT_NE(CalcStmt::create(result.sql_nodes()[0]->calc, raw_stmt), RC::SUCCESS);
+    EXPECT_EQ(raw_stmt, nullptr);
+  }
+
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("select -2 * -3 + 1 as result;", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  Stmt *raw_stmt = nullptr;
+  ASSERT_EQ(CalcStmt::create(result.sql_nodes()[0]->calc, raw_stmt), RC::SUCCESS);
+  unique_ptr<Stmt> stmt(raw_stmt);
+  Value value;
+  ASSERT_EQ(static_cast<CalcStmt &>(*stmt).expressions()[0]->try_get_value(value), RC::SUCCESS);
+  EXPECT_EQ(value.get_int(), 7);
+}
+
+TEST(ParserTest, unary_distance_expression_traversal_skips_missing_child)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("select -distance(a, b, 'DOT') from t;", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_SELECT);
+  auto &expr = result.sql_nodes()[0]->selection.expressions[0];
+  size_t child_count = 0;
+  function<RC(unique_ptr<Expression> &)> visit = [&](unique_ptr<Expression> &child) -> RC {
+    EXPECT_NE(child, nullptr);
+    if (child == nullptr) {
+      return RC::INTERNAL;
+    }
+    child_count++;
+    return ExpressionIterator::iterate_child_expr(*child, visit);
+  };
+  EXPECT_EQ(ExpressionIterator::iterate_child_expr(*expr, visit), RC::SUCCESS);
+  EXPECT_EQ(child_count, 4U);
 }
 
 TEST(ParserTest, DISABLED_aggregation_test)

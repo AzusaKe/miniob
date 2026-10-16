@@ -11,6 +11,8 @@
 #include "sql/parser/yacc_sql.hpp"
 #include "sql/parser/lex_sql.h"
 #include "sql/expr/expression.h"
+#include "sql/expr/vector_function_expression.h"
+#include "common/type/vector_type.h"
 
 using namespace std;
 
@@ -73,6 +75,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         INDEX
         CALC
         SELECT
+        AS
         DESC
         SHOW
         SYNC
@@ -90,6 +93,9 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         FLOAT_T
         DATE_T
         VECTOR_T
+        STRING_TO_VECTOR
+        VECTOR_TO_STRING
+        DISTANCE
         HELP
         EXIT
         DOT //QUOTE
@@ -146,6 +152,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %destructor { delete $$; } <value>
 %destructor { delete $$; } <rel_attr>
 %destructor { delete $$; } <attr_infos>
+%destructor { delete $$; } <attr_info>
 %destructor { delete $$; } <expression>
 %destructor { delete $$; } <expression_list>
 %destructor { delete $$; } <value_list>
@@ -165,6 +172,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <condition>           condition
 %type <value>               value
 %type <value>               unsigned_value
+%type <value>               vector_value
 %type <number>              number
 %type <cstring>             relation
 %type <comp>                comp_op
@@ -181,7 +189,11 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <from>                joined_relation
 %type <expression>          expression
 %type <expression>          aggregate_expression
+%type <expression>          vector_function_expression
+%type <expression>          projection_expression
 %type <expression_list>     expression_list
+%type <expression_list>     function_arguments
+%type <expression_list>     projection_list
 %type <expression_list>     group_by
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
@@ -369,13 +381,26 @@ attr_def:
       $$->type = (AttrType)$2;
       $$->name = $1;
       $$->length = $4;
+      if ($$->type == AttrType::VECTORS) {
+        // NUMBER uses int for legacy scalar syntax. Re-read the original
+        // decimal token so oversized dimensions cannot wrap into valid ones.
+        int dimension = 0;
+        for (char digit : token_name(sql_string, &@4)) {
+          if (dimension > (VectorType::MAX_DIMENSIONS - (digit - '0')) / 10) {
+            dimension = 0;
+            break;
+          }
+          dimension = dimension * 10 + digit - '0';
+        }
+        $$->length = dimension;
+      }
     }
     | ID type
     {
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = 4;
+      $$->length = ($2 == static_cast<int>(AttrType::VECTORS)) ? 2048 : 4;
     }
     ;
 number:
@@ -448,6 +473,22 @@ value:
     | '-' FLOAT {
       $$ = new Value(-(float)$2);
     }
+    | vector_value {
+      $$ = $1;
+    }
+    ;
+
+vector_value:
+    STRING_TO_VECTOR LBRACE SSS RBRACE {
+      string input($3 + 1, strlen($3) - 2);
+      Value parsed_value;
+      if (VectorType().set_value_from_str(parsed_value, input) != RC::SUCCESS) {
+        // Keep a syntactically valid INSERT/UPDATE and let statement validation
+        // reject its undefined value as a semantic error.
+        parsed_value = Value();
+      }
+      $$ = new Value(std::move(parsed_value));
+    }
     ;
 
 // Expressions already apply unary minus; use unsigned atoms to avoid ambiguity.
@@ -503,7 +544,7 @@ update_stmt:      /*  update 语句的语法解析树*/
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by
+    SELECT projection_list FROM rel_list where group_by
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -527,13 +568,40 @@ select_stmt:        /*  select 语句的语法解析树*/
         delete $6;
       }
     }
-    ;
-calc_stmt:
-    CALC expression_list
+    | SELECT projection_list
     {
       $$ = new ParsedSqlNode(SCF_CALC);
       $$->calc.expressions.swap(*$2);
       delete $2;
+    }
+    ;
+calc_stmt:
+    CALC projection_list
+    {
+      $$ = new ParsedSqlNode(SCF_CALC);
+      $$->calc.expressions.swap(*$2);
+      delete $2;
+    }
+    ;
+
+projection_list:
+    projection_expression
+    {
+      $$ = new vector<unique_ptr<Expression>>;
+      $$->emplace_back($1);
+    }
+    | projection_list COMMA projection_expression
+    {
+      $$ = $1;
+      $$->emplace_back($3);
+    }
+    ;
+
+projection_expression:
+    expression { $$ = $1; }
+    | expression AS ID {
+      $$ = $1;
+      $$->set_alias($3);
     }
     ;
 
@@ -594,6 +662,32 @@ expression:
     | aggregate_expression {
       $$ = $1;
     }
+    | vector_function_expression {
+      $$ = $1;
+    }
+    ;
+
+vector_function_expression:
+    STRING_TO_VECTOR LBRACE function_arguments RBRACE {
+      $$ = new VectorFunctionExpr(VectorFunctionExpr::Type::STRING_TO_VECTOR, std::move(*$3));
+      delete $3;
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | VECTOR_TO_STRING LBRACE function_arguments RBRACE {
+      $$ = new VectorFunctionExpr(VectorFunctionExpr::Type::VECTOR_TO_STRING, std::move(*$3));
+      delete $3;
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | DISTANCE LBRACE function_arguments RBRACE {
+      $$ = new VectorFunctionExpr(VectorFunctionExpr::Type::DISTANCE, std::move(*$3));
+      delete $3;
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    ;
+
+function_arguments:
+    /* empty */ { $$ = new vector<unique_ptr<Expression>>; }
+    | expression_list { $$ = $1; }
     ;
 
 aggregate_expression:

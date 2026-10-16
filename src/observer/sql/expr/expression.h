@@ -47,6 +47,7 @@ enum class ExprType
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
+  VECTOR_FUNCTION,  ///< Vector conversion and distance functions
 };
 
 /**
@@ -116,6 +117,8 @@ public:
    */
   virtual const char *name() const { return name_.c_str(); }
   virtual void        set_name(string name) { name_ = name; }
+  void set_alias(string alias) { name_ = std::move(alias); has_alias_ = true; }
+  bool has_alias() const { return has_alias_; }
 
   /**
    * @brief 表达式在下层算子返回的 chunk 中的位置
@@ -139,6 +142,7 @@ protected:
 
 private:
   string name_;
+  bool has_alias_ = false;
 };
 
 class StarExpr : public Expression

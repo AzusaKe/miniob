@@ -42,6 +42,8 @@ public:
   int         len() const;
   bool        visible() const;
   int         field_id() const;
+  int         vector_dim() const { return vector_dim_; }
+  void        set_vector_dim(int dimensions) { vector_dim_ = dimensions; }
 
 public:
   void desc(ostream &os) const;
@@ -57,4 +59,5 @@ protected:
   int      attr_len_;
   bool     visible_;
   int      field_id_;
+  int      vector_dim_ = 0;
 };

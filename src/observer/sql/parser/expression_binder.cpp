@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/ranges.h"
 #include "sql/parser/expression_binder.h"
 #include "sql/expr/expression_iterator.h"
+#include "sql/expr/vector_function_expression.h"
 
 using namespace common;
 
@@ -84,6 +85,10 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
 
     case ExprType::ARITHMETIC: {
       return bind_arithmetic_expression(expr, bound_expressions);
+    } break;
+
+    case ExprType::VECTOR_FUNCTION: {
+      return bind_vector_function_expression(expr, bound_expressions);
     } break;
 
     case ExprType::AGGREGATION: {
@@ -175,7 +180,11 @@ RC ExpressionBinder::bind_unbound_field_expression(
 
     Field      field(table, field_meta);
     FieldExpr *field_expr = new FieldExpr(field);
-    field_expr->set_name(field_name);
+    if (expr->has_alias()) {
+      field_expr->set_alias(expr->name());
+    } else {
+      field_expr->set_name(field_name);
+    }
     bound_expressions.emplace_back(field_expr);
   }
 
@@ -336,11 +345,18 @@ RC ExpressionBinder::bind_arithmetic_expression(
   }
 
   unique_ptr<Expression> &left = child_bound_expressions[0];
+  if (left->value_type() == AttrType::VECTORS) {
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+  }
   if (left.get() != left_expr.get()) {
     left_expr.reset(left.release());
   }
 
   child_bound_expressions.clear();
+  if (right_expr == nullptr) {
+    bound_expressions.emplace_back(std::move(expr));
+    return RC::SUCCESS;
+  }
   rc = bind_expression(right_expr, child_bound_expressions);
   if (OB_FAIL(rc)) {
     return rc;
@@ -352,6 +368,9 @@ RC ExpressionBinder::bind_arithmetic_expression(
   }
 
   unique_ptr<Expression> &right = child_bound_expressions[0];
+  if (right->value_type() == AttrType::VECTORS) {
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+  }
   if (right.get() != right_expr.get()) {
     right_expr.reset(right.release());
   }
@@ -449,11 +468,38 @@ RC ExpressionBinder::bind_aggregate_expression(
 
   auto aggregate_expr = make_unique<AggregateExpr>(aggregate_type, std::move(child_expr));
   aggregate_expr->set_name(unbound_aggregate_expr->name());
+  if (unbound_aggregate_expr->has_alias()) {
+    aggregate_expr->set_alias(unbound_aggregate_expr->name());
+  }
   rc = check_aggregate_expression(*aggregate_expr);
   if (OB_FAIL(rc)) {
     return rc;
   }
 
   bound_expressions.emplace_back(std::move(aggregate_expr));
+  return RC::SUCCESS;
+}
+
+RC ExpressionBinder::bind_vector_function_expression(
+    unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
+{
+  auto function_expr = static_cast<VectorFunctionExpr *>(expr.get());
+  for (auto &child : function_expr->children()) {
+    vector<unique_ptr<Expression>> bound_children;
+    RC rc = bind_expression(child, bound_children);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    if (bound_children.size() != 1) {
+      return RC::INVALID_ARGUMENT;
+    }
+    child = std::move(bound_children[0]);
+  }
+
+  RC rc = function_expr->validate();
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  bound_expressions.emplace_back(std::move(expr));
   return RC::SUCCESS;
 }

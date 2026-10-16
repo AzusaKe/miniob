@@ -76,9 +76,16 @@ RC UpdatePhysicalOperator::update(Trx *trx)
     new_record.set_rid(old_record.rid());
     new_record.set_key(old_record.key());
 
-    char *field_data = new_record.data() + field_meta_->offset();
-    memset(field_data, 0, field_meta_->len());
-    memcpy(field_data, value_.data(), std::min(field_meta_->len(), value_.length()));
+    if (field_meta_->type() == AttrType::VECTORS) {
+      rc = table_->set_value_to_record(new_record.data(), value_, field_meta_);
+      if (rc != RC::SUCCESS) {
+        return rc;
+      }
+    } else {
+      char *field_data = new_record.data() + field_meta_->offset();
+      memset(field_data, 0, field_meta_->len());
+      memcpy(field_data, value_.data(), std::min(field_meta_->len(), value_.length()));
+    }
 
     rc = trx->update_record(table_, old_record, new_record);
     if (rc != RC::SUCCESS) {

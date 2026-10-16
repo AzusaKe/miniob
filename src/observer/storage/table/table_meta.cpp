@@ -18,6 +18,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/global_context.h"
 #include "storage/table/table_meta.h"
 #include "storage/trx/trx.h"
+#include "common/type/vector_type.h"
 #include "json/json.h"
 
 static const Json::StaticString FIELD_TABLE_ID("table_id");
@@ -82,15 +83,27 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
 
   for (size_t i = 0; i < attributes.size(); i++) {
     const AttrInfoSqlNode &attr_info = attributes[i];
+    if (attr_info.type == AttrType::VECTORS &&
+        (attr_info.length < 1 || attr_info.length > VectorType::MAX_DIMENSIONS)) {
+      return RC::INVALID_ARGUMENT;
+    }
+    if (attr_info.type == AttrType::VECTORS &&
+        std::find(primary_keys.begin(), primary_keys.end(), attr_info.name) != primary_keys.end()) {
+      return RC::UNSUPPORTED;
+    }
+    const int field_length = attr_info.type == AttrType::VECTORS ? VectorType::STORAGE_SIZE : attr_info.length;
     // `i` is the col_id of fields[i]
     rc = fields_[i + trx_field_num].init(
-      attr_info.name.c_str(), attr_info.type, field_offset, attr_info.length, true /*visible*/, i);
+      attr_info.name.c_str(), attr_info.type, field_offset, field_length, true /*visible*/, i);
     if (OB_FAIL(rc)) {
       LOG_ERROR("Failed to init field meta. table name=%s, field name: %s", name, attr_info.name.c_str());
       return rc;
     }
 
-    field_offset += attr_info.length;
+    if (attr_info.type == AttrType::VECTORS) {
+      fields_[i + trx_field_num].set_vector_dim(attr_info.length);
+    }
+    field_offset += field_length;
   }
 
   primary_keys_ = primary_keys;
