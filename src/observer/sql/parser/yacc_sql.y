@@ -162,6 +162,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <number>              type
 %type <condition>           condition
 %type <value>               value
+%type <value>               unsigned_value
 %type <number>              number
 %type <cstring>             relation
 %type <comp>                comp_op
@@ -435,6 +436,19 @@ value_list:
     }
     ;
 value:
+    unsigned_value {
+      $$ = $1;
+    }
+    | '-' NUMBER {
+      $$ = new Value(-(int)$2);
+    }
+    | '-' FLOAT {
+      $$ = new Value(-(float)$2);
+    }
+    ;
+
+// Expressions already apply unary minus; use unsigned atoms to avoid ambiguity.
+unsigned_value:
     NUMBER {
       $$ = new Value((int)$1);
       @$ = @1;
@@ -478,6 +492,7 @@ update_stmt:      /*  update 语句的语法解析树*/
       $$->update.relation_name = $2;
       $$->update.attribute_name = $4;
       $$->update.value = *$6;
+      delete $6;
       if ($7 != nullptr) {
         $$->update.conditions.swap(*$7);
         delete $7;
@@ -557,7 +572,7 @@ expression:
     | '*' {
       $$ = new StarExpr();
     }
-    | value {
+    | unsigned_value {
       $$ = new ValueExpr(*$1);
       $$->set_name(token_name(sql_string, &@$));
       delete $1;

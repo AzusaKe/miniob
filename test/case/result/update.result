@@ -1,0 +1,236 @@
+EMPTY TABLES STILL VALIDATE ASSIGNMENTS AND PREDICATES
+create table update_case(id int, grp int, score float, label char(16), born date);
+SUCCESS
+update update_case set id = 1;
+SUCCESS
+update update_missing set id = 1;
+FAILURE
+update update_case set missing = 1;
+FAILURE
+update update_case set id = 1 where missing = 1;
+FAILURE
+update update_case set id = 'bad';
+FAILURE
+update update_case set score = 'bad';
+FAILURE
+update update_case set label = 1;
+FAILURE
+update update_case set born = 20000101;
+FAILURE
+update update_case set born = '1900-2-29';
+FAILURE
+update update_case set born = '2000-2-30' where id = 99;
+FAILURE
+update update_case set score = 2 where born = '2100-2-29';
+FAILURE
+update update_case set score = 2 where '2100-2-29' < born;
+FAILURE
+select * from update_case;
+ID | GRP | SCORE | LABEL | BORN
+
+SINGLE COLUMN CHANGES PRESERVE EVERY OTHER FIELD
+insert into update_case values(1, 1, 1.25, 'long-old-label', '1969-12-31');
+SUCCESS
+insert into update_case values(2, 1, 2.5, 'beta', '2000-2-29');
+SUCCESS
+insert into update_case values(3, 2, 3.75, 'gamma', '2038-2-1');
+SUCCESS
+insert into update_case values(4, 3, 4.5, 'delta', '2400-2-29');
+SUCCESS
+update update_case set label = 'z' where id = 1;
+SUCCESS
+select * from update_case;
+1 | 1 | 1.25 | Z | 1969-12-31
+2 | 1 | 2.5 | BETA | 2000-02-29
+3 | 2 | 3.75 | GAMMA | 2038-02-01
+4 | 3 | 4.5 | DELTA | 2400-02-29
+ID | GRP | SCORE | LABEL | BORN
+select id from update_case where label = 'long-old-label';
+ID
+select label from update_case where id = 1;
+LABEL
+Z
+update update_case set label = '2020-1-1' where id = 2;
+SUCCESS
+update update_case set grp = 9;
+SUCCESS
+update update_case set score = 7 where grp = 9 and id <= 2;
+SUCCESS
+update update_case set id = -5 where id = 3;
+SUCCESS
+update update_case set score = -6.25 where id = 4;
+SUCCESS
+update update_case set born = '1900-2-28' where id = -5;
+SUCCESS
+update update_case set born = '2400-2-29' where id = 4;
+SUCCESS
+select * from update_case;
+-5 | 9 | 3.75 | GAMMA | 1900-02-28
+1 | 9 | 7 | Z | 1969-12-31
+2 | 9 | 7 | 2020-1-1 | 2000-02-29
+4 | 9 | -6.25 | DELTA | 2400-02-29
+ID | GRP | SCORE | LABEL | BORN
+
+INVALID UPDATES LEAVE ALL POPULATED ROWS UNCHANGED
+update update_case set born = '2100-2-29' where id = 1;
+FAILURE
+update update_case set id = 'bad' where id = 1;
+FAILURE
+update update_case set grp = 2 where born = '1900-2-29';
+FAILURE
+update update_case set grp = 2 where missing = 9;
+FAILURE
+update update_case set id = 100 where id = 99;
+SUCCESS
+select * from update_case;
+-5 | 9 | 3.75 | GAMMA | 1900-02-28
+1 | 9 | 7 | Z | 1969-12-31
+2 | 9 | 7 | 2020-1-1 | 2000-02-29
+4 | 9 | -6.25 | DELTA | 2400-02-29
+ID | GRP | SCORE | LABEL | BORN
+
+MOVING AN INDEXED SCAN KEY UPDATES DUPLICATE ROWS EXACTLY ONCE
+create index update_case_id on update_case(id);
+SUCCESS
+create index update_case_grp on update_case(grp);
+SUCCESS
+create index update_case_score on update_case(score);
+SUCCESS
+create index update_case_label on update_case(label);
+SUCCESS
+create index update_case_born on update_case(born);
+SUCCESS
+update update_case set id = 5 where id < 10;
+SUCCESS
+select * from update_case;
+5 | 9 | -6.25 | DELTA | 2400-02-29
+5 | 9 | 3.75 | GAMMA | 1900-02-28
+5 | 9 | 7 | 2020-1-1 | 2000-02-29
+5 | 9 | 7 | Z | 1969-12-31
+ID | GRP | SCORE | LABEL | BORN
+select id, label from update_case where id = 1;
+ID | LABEL
+select id, label from update_case where id = -5;
+ID | LABEL
+select id, label from update_case where id = 5;
+5 | 2020-1-1
+5 | DELTA
+5 | GAMMA
+5 | Z
+ID | LABEL
+update update_case set id = 5 where id = 5;
+SUCCESS
+select * from update_case;
+5 | 9 | -6.25 | DELTA | 2400-02-29
+5 | 9 | 3.75 | GAMMA | 1900-02-28
+5 | 9 | 7 | 2020-1-1 | 2000-02-29
+5 | 9 | 7 | Z | 1969-12-31
+ID | GRP | SCORE | LABEL | BORN
+update update_case set grp = 6 where grp = 9 and id = 5;
+SUCCESS
+select id, grp, label from update_case where grp = 9;
+ID | GRP | LABEL
+select id, grp, label from update_case where grp = 6;
+5 | 6 | 2020-1-1
+5 | 6 | DELTA
+5 | 6 | GAMMA
+5 | 6 | Z
+ID | GRP | LABEL
+
+EVERY INDEX FOLLOWS CHANGES AND SHORTER CHARACTER VALUES
+update update_case set label = 'q' where label = '2020-1-1';
+SUCCESS
+select label from update_case where label = 'q';
+LABEL
+Q
+select label from update_case where label = '2020-1-1';
+LABEL
+update update_case set born = '2000-2-29' where born = '1900-2-28';
+SUCCESS
+select id, born, label from update_case where born = '1900-2-28';
+ID | BORN | LABEL
+select id, born, label from update_case where born = '2000-2-29';
+5 | 2000-02-29 | GAMMA
+5 | 2000-02-29 | Q
+ID | BORN | LABEL
+update update_case set score = 8.5 where score = 7;
+SUCCESS
+select id, score, label from update_case where score = 7;
+ID | SCORE | LABEL
+select id, score, label from update_case where score = 8.5;
+5 | 8.5 | Q
+5 | 8.5 | Z
+ID | SCORE | LABEL
+update update_case set id = 0 where id = 5 and grp = 6 and score = 8.5;
+SUCCESS
+select * from update_case;
+0 | 6 | 8.5 | Q | 2000-02-29
+0 | 6 | 8.5 | Z | 1969-12-31
+5 | 6 | -6.25 | DELTA | 2400-02-29
+5 | 6 | 3.75 | GAMMA | 2000-02-29
+ID | GRP | SCORE | LABEL | BORN
+select id, label from update_case where id = 0;
+0 | Q
+0 | Z
+ID | LABEL
+select id, label from update_case where id = 5;
+5 | DELTA
+5 | GAMMA
+ID | LABEL
+update update_case set label = 'done';
+SUCCESS
+select * from update_case;
+0 | 6 | 8.5 | DONE | 1969-12-31
+0 | 6 | 8.5 | DONE | 2000-02-29
+5 | 6 | -6.25 | DONE | 2400-02-29
+5 | 6 | 3.75 | DONE | 2000-02-29
+ID | GRP | SCORE | LABEL | BORN
+select label from update_case where label = 'z';
+LABEL
+select label from update_case where label = 'gamma';
+LABEL
+
+UPDATED INDEXES COEXIST WITH INSERT DELETE AND DROP RECREATION
+insert into update_case values(9, 9, 9.5, 'new', '2039-1-1');
+SUCCESS
+select id, born from update_case where id = 9;
+9 | 2039-01-01
+ID | BORN
+delete from update_case where id = 0;
+SUCCESS
+select * from update_case;
+5 | 6 | -6.25 | DONE | 2400-02-29
+5 | 6 | 3.75 | DONE | 2000-02-29
+9 | 9 | 9.5 | NEW | 2039-01-01
+ID | GRP | SCORE | LABEL | BORN
+update update_case set id = 100 where id = 5;
+SUCCESS
+select id, label from update_case where id = 5;
+ID | LABEL
+select id, label from update_case where id = 100;
+100 | DONE
+100 | DONE
+ID | LABEL
+drop table update_case;
+SUCCESS
+update update_case set id = 1;
+FAILURE
+create table update_case(id int, born date);
+SUCCESS
+create index update_case_id on update_case(id);
+SUCCESS
+insert into update_case values(1, '1969-12-31');
+SUCCESS
+update update_case set id = 2 where id = 1;
+SUCCESS
+update update_case set born = '2400-2-29' where id = 2;
+SUCCESS
+select * from update_case where id = 1;
+ID | BORN
+select * from update_case where id = 2;
+ID | BORN
+2 | 2400-02-29
+drop table update_case;
+SUCCESS
+show tables;
+TABLES_IN_SYS

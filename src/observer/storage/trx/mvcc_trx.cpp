@@ -178,6 +178,17 @@ RC MvccTrx::delete_record(Table *table, Record &record)
   return RC::SUCCESS;
 }
 
+RC MvccTrx::update_record(Table *table, Record &old_record, Record &new_record)
+{
+  // Preserve the original version for readers and rollback, and insert the new
+  // version through the normal index/WAL path.
+  RC rc = delete_record(table, old_record);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  return insert_record(table, new_record);
+}
+
 RC MvccTrx::visit_record(Table *table, Record &record, ReadWriteMode mode)
 {
   Field begin_field;
@@ -197,7 +208,7 @@ RC MvccTrx::visit_record(Table *table, Record &record, ReadWriteMode mode)
     }
   } else if (begin_xid < 0) {
     // begin xid 小于0说明是刚插入而且没有提交的数据
-    if (-begin_xid == trx_id_) {
+    if (-begin_xid == trx_id_ && end_xid != -trx_id_) {
       rc = RC::SUCCESS;
     } else {
       LOG_TRACE("record invisible. someone is updating this record right now. trx id=%d, begin xid=%d, end xid=%d",
@@ -350,22 +361,23 @@ RC MvccTrx::rollback()
         Table *table = operation.table();
         // 这里也可以不删除，仅仅给数据加个标识位，等垃圾回收器来收割也行
         Record record;
-        record.set_rid(rid);
+        // Index removal needs the full inserted row, including during a normal
+        // UPDATE rollback, rather than a Record containing only its RID.
+        rc = table->get_record(rid, record);
+        if (recovering_ && rc == RC::RECORD_NOT_EXIST) {
+          continue;
+        }
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to get inserted record while rollback. table=%s, rid=%s, rc=%s",
+                   table->name(), rid.to_string().c_str(), strrc(rc));
+          return rc;
+        }
         if (recovering_) {
           // 恢复的时候，需要额外判断下当前记录是否还是当前事务拥有。是的话才能删除记录
-          rc = table->get_record(rid, record);
-          if (OB_SUCC(rc)) {
-            Field begin_xid_field, end_xid_field;
-            trx_fields(table, begin_xid_field, end_xid_field);
-            if (begin_xid_field.get_int(record) != -trx_id_) {
-              continue;
-            }
-          } else if (RC::RECORD_NOT_EXIST == rc) {
+          Field begin_xid_field, end_xid_field;
+          trx_fields(table, begin_xid_field, end_xid_field);
+          if (begin_xid_field.get_int(record) != -trx_id_) {
             continue;
-          } else {
-            LOG_WARN("failed to get record while rollback. table=%s, rid=%s, rc=%s", 
-                     table->name(), rid.to_string().c_str(), strrc(rc));
-            return rc;
           }
         }
         rc = table->delete_record(record);

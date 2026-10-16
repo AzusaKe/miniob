@@ -18,6 +18,45 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
+TEST(ParserTest, update_negative_integer)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("update t set id = -7 where age <= -2;", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_UPDATE);
+  const UpdateSqlNode &update = result.sql_nodes()[0]->update;
+  EXPECT_EQ(update.value.attr_type(), AttrType::INTS);
+  EXPECT_EQ(update.value.get_int(), -7);
+  ASSERT_EQ(update.conditions.size(), 1U);
+  EXPECT_EQ(update.conditions[0].right_value.get_int(), -2);
+}
+
+TEST(ParserTest, update_negative_float_and_left_condition)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("update t set score = -1.25 where -2.5 < score;", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_UPDATE);
+  const UpdateSqlNode &update = result.sql_nodes()[0]->update;
+  EXPECT_EQ(update.value.attr_type(), AttrType::FLOATS);
+  EXPECT_FLOAT_EQ(update.value.get_float(), -1.25F);
+  ASSERT_EQ(update.conditions.size(), 1U);
+  EXPECT_EQ(update.conditions[0].left_is_attr, 0);
+  EXPECT_FLOAT_EQ(update.conditions[0].left_value.get_float(), -2.5F);
+}
+
+TEST(ParserTest, signed_literals_preserve_arithmetic_precedence)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("calc -2 * -3 + 1;", &result), RC::SUCCESS);
+  ASSERT_EQ(result.sql_nodes().size(), 1U);
+  ASSERT_EQ(result.sql_nodes()[0]->flag, SCF_CALC);
+  ASSERT_EQ(result.sql_nodes()[0]->calc.expressions.size(), 1U);
+  Value value;
+  ASSERT_EQ(result.sql_nodes()[0]->calc.expressions[0]->try_get_value(value), RC::SUCCESS);
+  EXPECT_EQ(value.get_int(), 7);
+}
+
 TEST(ParserTest, DISABLED_aggregation_test)
 {
   ParsedSqlResult result;

@@ -1,0 +1,97 @@
+-- echo empty tables still validate assignments and predicates
+create table update_case(id int, grp int, score float, label char(16), born date);
+update update_case set id = 1;
+update update_missing set id = 1;
+update update_case set missing = 1;
+update update_case set id = 1 where missing = 1;
+update update_case set id = 'bad';
+update update_case set score = 'bad';
+update update_case set label = 1;
+update update_case set born = 20000101;
+update update_case set born = '1900-2-29';
+update update_case set born = '2000-2-30' where id = 99;
+update update_case set score = 2 where born = '2100-2-29';
+update update_case set score = 2 where '2100-2-29' < born;
+-- sort select * from update_case;
+
+-- echo single column changes preserve every other field
+insert into update_case values(1, 1, 1.25, 'long-old-label', '1969-12-31');
+insert into update_case values(2, 1, 2.5, 'beta', '2000-2-29');
+insert into update_case values(3, 2, 3.75, 'gamma', '2038-2-1');
+insert into update_case values(4, 3, 4.5, 'delta', '2400-2-29');
+update update_case set label = 'z' where id = 1;
+-- sort select * from update_case;
+-- sort select id from update_case where label = 'long-old-label';
+select label from update_case where id = 1;
+update update_case set label = '2020-1-1' where id = 2;
+update update_case set grp = 9;
+update update_case set score = 7 where grp = 9 and id <= 2;
+update update_case set id = -5 where id = 3;
+update update_case set score = -6.25 where id = 4;
+update update_case set born = '1900-2-28' where id = -5;
+update update_case set born = '2400-2-29' where id = 4;
+-- sort select * from update_case;
+
+-- echo invalid updates leave all populated rows unchanged
+update update_case set born = '2100-2-29' where id = 1;
+update update_case set id = 'bad' where id = 1;
+update update_case set grp = 2 where born = '1900-2-29';
+update update_case set grp = 2 where missing = 9;
+update update_case set id = 100 where id = 99;
+-- sort select * from update_case;
+
+-- echo moving an indexed scan key updates duplicate rows exactly once
+create index update_case_id on update_case(id);
+create index update_case_grp on update_case(grp);
+create index update_case_score on update_case(score);
+create index update_case_label on update_case(label);
+create index update_case_born on update_case(born);
+update update_case set id = 5 where id < 10;
+-- sort select * from update_case;
+-- sort select id, label from update_case where id = 1;
+-- sort select id, label from update_case where id = -5;
+-- sort select id, label from update_case where id = 5;
+update update_case set id = 5 where id = 5;
+-- sort select * from update_case;
+update update_case set grp = 6 where grp = 9 and id = 5;
+-- sort select id, grp, label from update_case where grp = 9;
+-- sort select id, grp, label from update_case where grp = 6;
+
+-- echo every index follows changes and shorter character values
+update update_case set label = 'q' where label = '2020-1-1';
+select label from update_case where label = 'q';
+select label from update_case where label = '2020-1-1';
+update update_case set born = '2000-2-29' where born = '1900-2-28';
+-- sort select id, born, label from update_case where born = '1900-2-28';
+-- sort select id, born, label from update_case where born = '2000-2-29';
+update update_case set score = 8.5 where score = 7;
+-- sort select id, score, label from update_case where score = 7;
+-- sort select id, score, label from update_case where score = 8.5;
+update update_case set id = 0 where id = 5 and grp = 6 and score = 8.5;
+-- sort select * from update_case;
+-- sort select id, label from update_case where id = 0;
+-- sort select id, label from update_case where id = 5;
+update update_case set label = 'done';
+-- sort select * from update_case;
+select label from update_case where label = 'z';
+select label from update_case where label = 'gamma';
+
+-- echo updated indexes coexist with insert delete and drop recreation
+insert into update_case values(9, 9, 9.5, 'new', '2039-1-1');
+-- sort select id, born from update_case where id = 9;
+delete from update_case where id = 0;
+-- sort select * from update_case;
+update update_case set id = 100 where id = 5;
+-- sort select id, label from update_case where id = 5;
+-- sort select id, label from update_case where id = 100;
+drop table update_case;
+update update_case set id = 1;
+create table update_case(id int, born date);
+create index update_case_id on update_case(id);
+insert into update_case values(1, '1969-12-31');
+update update_case set id = 2 where id = 1;
+update update_case set born = '2400-2-29' where id = 2;
+select * from update_case where id = 1;
+select * from update_case where id = 2;
+drop table update_case;
+show tables;

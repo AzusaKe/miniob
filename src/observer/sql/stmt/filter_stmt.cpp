@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/stmt/filter_stmt.h"
+#include <memory>
 #include "common/lang/string.h"
 #include "common/log/log.h"
 #include "common/sys/rc.h"
@@ -82,6 +83,7 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
     const ConditionSqlNode &condition, FilterUnit *&filter_unit)
 {
   RC rc = RC::SUCCESS;
+  filter_unit = nullptr;
 
   CompOp comp = condition.comp;
   if (comp < EQUAL_TO || comp >= NO_OP) {
@@ -89,7 +91,7 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
     return RC::INVALID_ARGUMENT;
   }
 
-  filter_unit = new FilterUnit;
+  auto tmp_unit = std::make_unique<FilterUnit>();
 
   if (condition.left_is_attr) {
     Table           *table = nullptr;
@@ -101,11 +103,11 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
     }
     FilterObj filter_obj;
     filter_obj.init_attr(Field(table, field));
-    filter_unit->set_left(filter_obj);
+    tmp_unit->set_left(filter_obj);
   } else {
     FilterObj filter_obj;
     filter_obj.init_value(condition.left_value);
-    filter_unit->set_left(filter_obj);
+    tmp_unit->set_left(filter_obj);
   }
 
   if (condition.right_is_attr) {
@@ -118,15 +120,16 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
     }
     FilterObj filter_obj;
     filter_obj.init_attr(Field(table, field));
-    filter_unit->set_right(filter_obj);
+    tmp_unit->set_right(filter_obj);
   } else {
     FilterObj filter_obj;
     filter_obj.init_value(condition.right_value);
-    filter_unit->set_right(filter_obj);
+    tmp_unit->set_right(filter_obj);
   }
 
-  filter_unit->set_comp(comp);
+  tmp_unit->set_comp(comp);
 
   // 检查两个类型是否能够比较
+  filter_unit = tmp_unit.release();
   return rc;
 }

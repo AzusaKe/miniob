@@ -103,6 +103,63 @@ RC HeapTableEngine::delete_record(const Record &record)
   return rc;
 }
 
+RC HeapTableEngine::update_record_with_trx(const Record &old_record, const Record &new_record, Trx *)
+{
+  if (old_record.rid() != new_record.rid() || old_record.len() != table_meta_->record_size() ||
+      new_record.len() != table_meta_->record_size()) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  vector<Index *> changed_indexes;
+  for (Index *index : indexes_) {
+    const FieldMeta &field = *table_meta_->field(index->index_meta().field());
+    if (memcmp(old_record.data() + field.offset(), new_record.data() + field.offset(), field.len()) != 0) {
+      changed_indexes.push_back(index);
+    }
+  }
+
+  // Keep the old row until every new index entry is ready. If any index or record
+  // operation fails, restore the entries already changed for this row.
+  auto restore_indexes = [&](size_t removed, size_t inserted) {
+    for (size_t i = 0; i < inserted; i++) {
+      RC rc = changed_indexes[i]->delete_entry(new_record.data(), &new_record.rid());
+      if (OB_FAIL(rc)) {
+        LOG_ERROR("Failed to remove updated index entry. table=%s, rc=%s", table_meta_->name(), strrc(rc));
+      }
+    }
+    for (size_t i = 0; i < removed; i++) {
+      RC rc = changed_indexes[i]->insert_entry(old_record.data(), &old_record.rid());
+      if (OB_FAIL(rc)) {
+        LOG_ERROR("Failed to restore old index entry. table=%s, rc=%s", table_meta_->name(), strrc(rc));
+      }
+    }
+  };
+
+  for (size_t i = 0; i < changed_indexes.size(); i++) {
+    RC rc = changed_indexes[i]->delete_entry(old_record.data(), &old_record.rid());
+    if (OB_FAIL(rc)) {
+      restore_indexes(i, 0);
+      return rc;
+    }
+  }
+  for (size_t i = 0; i < changed_indexes.size(); i++) {
+    RC rc = changed_indexes[i]->insert_entry(new_record.data(), &new_record.rid());
+    if (OB_FAIL(rc)) {
+      restore_indexes(changed_indexes.size(), i);
+      return rc;
+    }
+  }
+
+  RC rc = record_handler_->visit_record(old_record.rid(), [&new_record](Record &record) {
+    memcpy(record.data(), new_record.data(), new_record.len());
+    return true;
+  });
+  if (OB_FAIL(rc)) {
+    restore_indexes(changed_indexes.size(), changed_indexes.size());
+  }
+  return rc;
+}
+
 RC HeapTableEngine::get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)
 {
   scanner = new HeapRecordScanner(table_, *data_buffer_pool_, trx, db_->log_handler(), mode, nullptr);
