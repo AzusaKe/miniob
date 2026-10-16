@@ -15,7 +15,9 @@ See the Mulan PSL v2 for more details. */
 RuleSet::RuleSet()
 {
   add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalProjectionToProjection());
+  add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalProjectionToProjection(true));
   add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalGetToPhysicalSeqScan());
+  add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalInnerJoinToNestedLoopJoin());
   add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalInsertToInsert());
   add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalExplainToExplain());
   add_rule(RuleSetName::PHYSICAL_IMPLEMENTATION, new LogicalCalcToCalc());

@@ -334,7 +334,8 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
   if (session->hash_join_on() && can_use_hash_join(join_oper)) {
     // your code here
   } else {
-    unique_ptr<PhysicalOperator> join_physical_oper(new NestedLoopJoinPhysicalOperator());
+    auto join_physical_oper = make_unique<NestedLoopJoinPhysicalOperator>();
+    join_physical_oper->set_predicates(std::move(join_oper.get_join_predicates()));
     for (auto &child_oper : child_opers) {
       unique_ptr<PhysicalOperator> child_physical_oper;
       rc = create(*child_oper, child_physical_oper, session);

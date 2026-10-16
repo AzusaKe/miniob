@@ -15,8 +15,69 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/predicate_pushdown_rewriter.h"
 #include "common/log/log.h"
 #include "sql/expr/expression.h"
+#include "sql/expr/expression_iterator.h"
+#include "sql/operator/join_logical_operator.h"
 #include "sql/operator/logical_operator.h"
 #include "sql/operator/table_get_logical_operator.h"
+
+namespace {
+
+void collect_tables(LogicalOperator &oper, unordered_set<const Table *> &tables)
+{
+  if (oper.type() == LogicalOperatorType::TABLE_GET) {
+    tables.insert(static_cast<TableGetLogicalOperator &>(oper).table());
+  }
+  for (auto &child : oper.children()) {
+    collect_tables(*child, tables);
+  }
+}
+
+void collect_fields(Expression &expr, unordered_set<const Table *> &tables)
+{
+  if (expr.type() == ExprType::FIELD) {
+    tables.insert(static_cast<FieldExpr &>(expr).field().table());
+  }
+  ExpressionIterator::iterate_child_expr(expr, [&](unique_ptr<Expression> &child) {
+    if (child) {
+      collect_fields(*child, tables);
+    }
+    return RC::SUCCESS;
+  });
+}
+
+bool contains_all(const unordered_set<const Table *> &scope, const unordered_set<const Table *> &required)
+{
+  for (const Table *table : required) {
+    if (scope.count(table) == 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// INNER JOIN conditions can be evaluated at the lowest subtree containing all
+// referenced tables, without materializing the full Cartesian product first.
+void push_predicate(LogicalOperator &oper, unique_ptr<Expression> expr,
+    const unordered_set<const Table *> &required)
+{
+  if (oper.type() == LogicalOperatorType::TABLE_GET) {
+    static_cast<TableGetLogicalOperator &>(oper).predicates().emplace_back(std::move(expr));
+    return;
+  }
+
+  auto &join = static_cast<JoinLogicalOperator &>(oper);
+  for (auto &child : join.children()) {
+    unordered_set<const Table *> scope;
+    collect_tables(*child, scope);
+    if (contains_all(scope, required)) {
+      push_predicate(*child, std::move(expr), required);
+      return;
+    }
+  }
+  join.add_join_predicate(std::move(expr));
+}
+
+}  // namespace
 
 RC PredicatePushdownRewriter::rewrite(unique_ptr<LogicalOperator> &oper, bool &change_made)
 {
@@ -30,11 +91,9 @@ RC PredicatePushdownRewriter::rewrite(unique_ptr<LogicalOperator> &oper, bool &c
   }
 
   unique_ptr<LogicalOperator> &child_oper = oper->children().front();
-  if (child_oper->type() != LogicalOperatorType::TABLE_GET) {
+  if (child_oper->type() != LogicalOperatorType::TABLE_GET && child_oper->type() != LogicalOperatorType::JOIN) {
     return rc;
   }
-
-  auto table_get_oper = static_cast<TableGetLogicalOperator *>(child_oper.get());
 
   vector<unique_ptr<Expression>> &predicate_oper_exprs = oper->expressions();
   if (predicate_oper_exprs.size() != 1) {
@@ -60,7 +119,11 @@ RC PredicatePushdownRewriter::rewrite(unique_ptr<LogicalOperator> &oper, bool &c
 
   if (!pushdown_exprs.empty()) {
     change_made = true;
-    table_get_oper->set_predicates(std::move(pushdown_exprs));
+    for (auto &expr : pushdown_exprs) {
+      unordered_set<const Table *> required;
+      collect_fields(*expr, required);
+      push_predicate(*child_oper, std::move(expr), required);
+    }
   }
   return rc;
 }

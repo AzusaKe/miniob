@@ -16,10 +16,68 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple.h"
+#include "sql/optimizer/conjunction_simplification_rule.h"
 #include "gtest/gtest.h"
 
 using namespace std;
 using namespace common;
+
+TEST(ConjunctionSimplification, DecisiveConstantAfterComparison)
+{
+  for (auto type : {ConjunctionExpr::Type::AND, ConjunctionExpr::Type::OR}) {
+    const bool decisive_value = type == ConjunctionExpr::Type::OR;
+    vector<unique_ptr<Expression>> children;
+    children.emplace_back(make_unique<ComparisonExpr>(EQUAL_TO,
+        make_unique<ValueExpr>(Value(1)), make_unique<ValueExpr>(Value(decisive_value ? 2 : 1))));
+    children.emplace_back(make_unique<ValueExpr>(Value(decisive_value)));
+    unique_ptr<Expression> expression = make_unique<ConjunctionExpr>(type, children);
+    ConjunctionSimplificationRule rule;
+    bool changed = false;
+    ASSERT_EQ(RC::SUCCESS, rule.rewrite(expression, changed));
+    EXPECT_TRUE(changed);
+    Value result;
+    ASSERT_EQ(RC::SUCCESS, expression->try_get_value(result));
+    EXPECT_EQ(decisive_value, result.get_boolean());
+  }
+}
+
+TEST(ConjunctionSimplification, ConsecutiveNeutralConstants)
+{
+  for (auto type : {ConjunctionExpr::Type::AND, ConjunctionExpr::Type::OR}) {
+    const bool neutral_value = type == ConjunctionExpr::Type::AND;
+    vector<unique_ptr<Expression>> children;
+    children.emplace_back(make_unique<ValueExpr>(Value(neutral_value)));
+    children.emplace_back(make_unique<ValueExpr>(Value(neutral_value)));
+    children.emplace_back(make_unique<ComparisonExpr>(EQUAL_TO,
+        make_unique<ValueExpr>(Value(1)), make_unique<ValueExpr>(Value(2))));
+    unique_ptr<Expression> expression = make_unique<ConjunctionExpr>(type, children);
+    ConjunctionSimplificationRule rule;
+    bool changed = false;
+    ASSERT_EQ(RC::SUCCESS, rule.rewrite(expression, changed));
+    EXPECT_TRUE(changed);
+    Value result;
+    ASSERT_EQ(RC::SUCCESS, expression->try_get_value(result));
+    EXPECT_FALSE(result.get_boolean());
+  }
+}
+
+TEST(ConjunctionSimplification, AllNeutralConstants)
+{
+  for (auto type : {ConjunctionExpr::Type::AND, ConjunctionExpr::Type::OR}) {
+    const bool neutral_value = type == ConjunctionExpr::Type::AND;
+    vector<unique_ptr<Expression>> children;
+    children.emplace_back(make_unique<ValueExpr>(Value(neutral_value)));
+    children.emplace_back(make_unique<ValueExpr>(Value(neutral_value)));
+    unique_ptr<Expression> expression = make_unique<ConjunctionExpr>(type, children);
+    ConjunctionSimplificationRule rule;
+    bool changed = false;
+    ASSERT_EQ(RC::SUCCESS, rule.rewrite(expression, changed));
+    EXPECT_TRUE(changed);
+    Value result;
+    ASSERT_EQ(RC::SUCCESS, expression->try_get_value(result));
+    EXPECT_EQ(neutral_value, result.get_boolean());
+  }
+}
 
 TEST(ArithmeticExpr, test_value_type)
 {

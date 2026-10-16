@@ -57,6 +57,7 @@ RC OptimizeStage::handle_request(SQLStageEvent *sql_event)
   // TODO: error handle
   unique_ptr<PhysicalOperator> physical_operator;
   if (sql_event->session_event()->session()->use_cascade()) {
+    sql_event->session_event()->session()->set_used_chunk_mode(false);
     physical_operator = optimizer.optimize(logical_operator.get());
     if (!physical_operator) {
       rc = RC::INTERNAL;
@@ -89,7 +90,19 @@ RC OptimizeStage::generate_physical_plan(
     unique_ptr<LogicalOperator> &logical_operator, unique_ptr<PhysicalOperator> &physical_operator, Session *session)
 {
   RC rc = RC::SUCCESS;
-  if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR && LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
+  function<bool(LogicalOperator &)> contains_join = [&](LogicalOperator &oper) {
+    if (oper.type() == LogicalOperatorType::JOIN) {
+      return true;
+    }
+    for (auto &child : oper.children()) {
+      if (contains_join(*child)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+      LogicalOperator::can_generate_vectorized_operator(logical_operator->type()) && !contains_join(*logical_operator)) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
     rc    = physical_plan_generator_.create_vec(*logical_operator, physical_operator, session);

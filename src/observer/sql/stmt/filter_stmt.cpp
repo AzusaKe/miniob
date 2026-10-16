@@ -56,6 +56,16 @@ RC get_table_and_field(Db *db, Table *default_table, unordered_map<string, Table
 {
   if (common::is_blank(attr.relation_name.c_str())) {
     table = default_table;
+    if (table == nullptr && tables != nullptr) {
+      for (const auto &entry : *tables) {
+        if (entry.second->table_meta().field(attr.attribute_name.c_str()) != nullptr) {
+          if (table != nullptr) {
+            return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+          }
+          table = entry.second;
+        }
+      }
+    }
   } else if (nullptr != tables) {
     auto iter = tables->find(attr.relation_name);
     if (iter != tables->end()) {

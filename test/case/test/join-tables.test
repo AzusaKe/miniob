@@ -1,0 +1,78 @@
+-- echo duplicate join keys and typed input rows
+create table jt_left(id int, grp int, born date, tag char(8));
+create table jt_right(id int, score float, label char(8), date_text char(16));
+create table jt_third(id int, grp int);
+create table jt_empty(id int);
+insert into jt_left values(1, 1, '2000-02-29', 'one');
+insert into jt_left values(1, 2, '1969-12-31', 'two');
+insert into jt_left values(2, 2, '2038-02-01', 'two');
+insert into jt_right values(1, 1.5, 'one', '2000-02-29');
+insert into jt_right values(1, 2, 'two', '1969-12-31');
+insert into jt_right values(2, 2.5, 'two', '2038-02-01');
+insert into jt_right values(3, 3, 'three', '2400-02-29');
+insert into jt_third values(1, 2);
+insert into jt_third values(2, 2);
+
+-- echo duplicate matches projections and chained joins
+-- sort select jt_left.id, jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.id = jt_right.id;
+-- sort select * from jt_left inner join jt_right on jt_left.id = jt_right.id;
+-- sort select jt_left.id, jt_left.tag, jt_right.label, jt_third.grp from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_third on jt_right.id = jt_third.id;
+-- sort select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_third on jt_left.id = jt_third.id and jt_left.grp = jt_third.grp;
+-- sort select tag, label, score from jt_left inner join jt_right on tag = label and jt_left.id = jt_right.id;
+
+-- echo conjunctions constants and where predicates
+-- sort select jt_left.id, jt_left.tag, jt_right.score from jt_left inner join jt_right on jt_left.id = jt_right.id and jt_left.tag = jt_right.label and jt_right.score > 1.5;
+-- sort select jt_left.id, jt_left.tag from jt_left inner join jt_right on jt_left.id = jt_right.id and jt_right.score > 1.5 where jt_left.grp = 2 and jt_left.born > '1970-01-01';
+-- sort select jt_left.tag, jt_right.id from jt_left inner join jt_right on jt_left.grp = 1;
+-- sort select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_right.score = 2;
+-- sort select jt_left.tag, jt_right.label from jt_left inner join jt_right on 1 = 1 and jt_left.id = jt_right.id;
+-- sort select jt_left.id from jt_left inner join jt_right on 1 = 0;
+-- sort select jt_left.id, jt_right.id from jt_left inner join jt_right on jt_left.id < jt_right.id and jt_right.score < 3;
+
+-- echo explicit and implicit inner joins can be mixed
+-- sort select jt_left.tag, jt_right.label, jt_third.grp from jt_left, jt_right, jt_third where jt_left.id = jt_right.id and jt_right.id = jt_third.id;
+-- sort select jt_left.tag, jt_right.label, jt_third.grp from jt_left inner join jt_right on jt_left.id = jt_right.id, jt_third where jt_right.id = jt_third.id;
+-- sort select jt_left.tag, jt_right.label, jt_third.grp from jt_left, jt_right inner join jt_third on jt_right.id = jt_third.id where jt_left.id = jt_right.id;
+
+-- echo an empty input at every join position yields no rows
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id, jt_empty;
+select jt_empty.id from jt_empty inner join jt_left on jt_empty.id = jt_left.id;
+select jt_left.id from jt_left inner join jt_empty on jt_left.id = jt_empty.id;
+select jt_left.id from jt_left inner join jt_empty on jt_left.id = jt_empty.id inner join jt_third on jt_empty.id = jt_third.id;
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_empty on jt_right.id = jt_empty.id;
+
+-- echo numeric promotion and date character comparison in both directions
+-- sort select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.born = jt_right.date_text;
+-- sort select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_right.date_text = jt_left.born;
+-- sort select jt_left.tag, jt_right.score from jt_left inner join jt_right on jt_left.grp = jt_right.score;
+-- sort select jt_left.tag, jt_right.score from jt_left inner join jt_right on jt_right.score >= jt_left.grp and jt_right.id = jt_left.id;
+
+-- echo invalid relations fields ambiguity and on scopes fail
+select jt_left.id from jt_left inner join jt_missing on jt_left.id = jt_missing.id;
+select jt_left.id from jt_left inner join jt_right on jt_left.missing = jt_right.id;
+select jt_left.id from jt_left inner join jt_right on id = jt_right.id;
+select id from jt_left inner join jt_right on jt_left.id = jt_right.id;
+select jt_left.id from jt_left inner join jt_right on jt_third.id = jt_right.id;
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_third.id inner join jt_third on jt_right.id = jt_third.id;
+select jt_left.id from jt_left, jt_right inner join jt_third on jt_left.id = jt_right.id;
+select jt_left.id from jt_left inner join jt_right on jt_left.born = '1900-02-29';
+
+-- echo indexes preserve duplicate and chained join results
+create index jt_left_id on jt_left(id);
+create index jt_right_id on jt_right(id);
+-- sort select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.id = jt_right.id and jt_right.score > 1.5 where jt_left.id = 1;
+-- sort select jt_left.tag, jt_right.label, jt_third.grp from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_third on jt_right.id = jt_third.id where jt_third.id = 1;
+
+-- echo qualified wildcard and false conditions after row predicates
+select jt_left.* from jt_left inner join jt_right on jt_left.id = jt_right.id where jt_left.id = 2;
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id and 1 = 0 where jt_left.grp = 2;
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id where jt_left.grp = 2 and 1 = 0;
+
+-- echo joins fall back correctly after activating chunk and cascade modes
+set execution_mode='chunk_iterator';
+select jt_left.id from jt_left where 1 = 0;
+set use_cascade=1;
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id where jt_left.id = 2;
+select jt_left.id from jt_left inner join jt_right on 1 = 0;
+set use_cascade=0;
+set execution_mode='tuple_iterator';

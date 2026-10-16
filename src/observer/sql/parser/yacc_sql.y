@@ -96,6 +96,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         INTO
         VALUES
         FROM
+        INNER
+        JOIN
         WHERE
         AND
         SET
@@ -133,7 +135,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   vector<Value> *                            value_list;
   vector<ConditionSqlNode> *                 condition_list;
   vector<RelAttrSqlNode> *                   rel_attr_list;
-  vector<string> *                           relation_list;
+  FromSqlNode *                              from;
   vector<string> *                           key_list;
   char *                                     cstring;
   int                                        number;
@@ -149,7 +151,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %destructor { delete $$; } <value_list>
 %destructor { delete $$; } <condition_list>
 // %destructor { delete $$; } <rel_attr_list>
-%destructor { delete $$; } <relation_list>
+%destructor { delete $$; } <from>
 %destructor { delete $$; } <key_list>
 
 %token <number> NUMBER
@@ -175,7 +177,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <cstring>             storage_format
 %type <key_list>            primary_key
 %type <key_list>            attr_list
-%type <relation_list>       rel_list
+%type <from>                rel_list
+%type <from>                joined_relation
 %type <expression>          expression
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
@@ -509,7 +512,8 @@ select_stmt:        /*  select 语句的语法解析树*/
       }
 
       if ($4 != nullptr) {
-        $$->selection.relations.swap(*$4);
+        $$->selection.relations.swap($4->relations);
+        $$->selection.joins.swap($4->joins);
         delete $4;
       }
 
@@ -572,6 +576,10 @@ expression:
     | '*' {
       $$ = new StarExpr();
     }
+    | ID DOT '*' {
+      $$ = new StarExpr($1);
+      $$->set_name(token_name(sql_string, &@$));
+    }
     | unsigned_value {
       $$ = new ValueExpr(*$1);
       $$->set_name(token_name(sql_string, &@$));
@@ -612,18 +620,37 @@ relation:
     }
     ;
 rel_list:
-    relation {
-      $$ = new vector<string>();
-      $$->push_back($1);
+    joined_relation {
+      $$ = $1;
     }
-    | relation COMMA rel_list {
-      if ($3 != nullptr) {
-        $$ = $3;
-      } else {
-        $$ = new vector<string>;
+    | rel_list COMMA joined_relation {
+      $$ = $1;
+      const size_t relation_offset = $$->relations.size();
+      for (string &relation : $3->relations) {
+        $$->relations.emplace_back(std::move(relation));
       }
+      for (InnerJoinSqlNode &join : $3->joins) {
+        join.relation_begin += relation_offset;
+        join.relation_end += relation_offset;
+        $$->joins.emplace_back(std::move(join));
+      }
+      delete $3;
+    }
+    ;
 
-      $$->insert($$->begin(), $1);
+joined_relation:
+    relation {
+      $$ = new FromSqlNode;
+      $$->relations.emplace_back($1);
+    }
+    | joined_relation INNER JOIN relation ON condition_list {
+      $$ = $1;
+      $$->relations.emplace_back($4);
+      InnerJoinSqlNode join;
+      join.relation_end = $$->relations.size();
+      join.conditions.swap(*$6);
+      $$->joins.emplace_back(std::move(join));
+      delete $6;
     }
     ;
 
@@ -637,19 +664,15 @@ where:
     }
     ;
 condition_list:
-    /* empty */
-    {
-      $$ = nullptr;
-    }
-    | condition {
+    condition {
       $$ = new vector<ConditionSqlNode>;
       $$->emplace_back(*$1);
       delete $1;
     }
-    | condition AND condition_list {
-      $$ = $3;
-      $$->emplace_back(*$1);
-      delete $1;
+    | condition_list AND condition {
+      $$ = $1;
+      $$->emplace_back(*$3);
+      delete $3;
     }
     ;
 condition:

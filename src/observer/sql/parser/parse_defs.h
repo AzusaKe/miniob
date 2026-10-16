@@ -76,6 +76,25 @@ struct ConditionSqlNode
 };
 
 /**
+ * @brief An INNER JOIN predicate and the relations visible to its ON clause.
+ * @details The half-open relation range indexes the enclosing FROM list. A
+ * comma starts a new join group; later joins cannot refer to earlier groups.
+ */
+struct InnerJoinSqlNode
+{
+  vector<ConditionSqlNode> conditions;
+  size_t                   relation_begin = 0;
+  size_t                   relation_end   = 0;
+};
+
+/** @brief Intermediate FROM clause used by the parser. */
+struct FromSqlNode
+{
+  vector<string>           relations;
+  vector<InnerJoinSqlNode>  joins;
+};
+
+/**
  * @brief 描述一个select语句
  * @ingroup SQLParser
  * @details 一个正常的select语句描述起来比这个要复杂很多，这里做了简化。
@@ -91,6 +110,7 @@ struct SelectSqlNode
   vector<unique_ptr<Expression>> expressions;  ///< 查询的表达式
   vector<string>                 relations;    ///< 查询的表
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
+  vector<InnerJoinSqlNode>       joins;        ///< INNER JOIN 的条件及其可见表范围
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
 };
 

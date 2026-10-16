@@ -26,24 +26,32 @@ RC NestedLoopJoinPhysicalOperator::open(Trx *trx)
   RC rc         = RC::SUCCESS;
   left_         = children_[0].get();
   right_        = children_[1].get();
+  left_tuple_   = nullptr;
+  right_tuple_  = nullptr;
+  joined_tuple_.set_left(nullptr);
+  joined_tuple_.set_right(nullptr);
+  left_closed_  = true;
   right_closed_ = true;
   round_done_   = true;
 
-  rc   = left_->open(trx);
   trx_ = trx;
+  rc = left_->open(trx);
+  if (rc != RC::SUCCESS) {
+    RC close_rc = left_->close();
+    if (close_rc != RC::SUCCESS) {
+      LOG_WARN("failed to clean up left oper after open error. rc=%s", strrc(close_rc));
+    }
+    return rc;
+  }
+  left_closed_ = false;
   return rc;
 }
 
 RC NestedLoopJoinPhysicalOperator::next()
 {
-  RC   rc             = RC::SUCCESS;
-  while (RC::SUCCESS == rc) {
-    bool left_need_step = (left_tuple_ == nullptr);
-    if (round_done_) {
-      left_need_step = true;
-    }
-
-    if (left_need_step) {
+  RC rc = RC::SUCCESS;
+  while (true) {
+    if (left_tuple_ == nullptr || round_done_) {
       rc = left_next();
       if (rc != RC::SUCCESS) {
         return rc;
@@ -53,32 +61,47 @@ RC NestedLoopJoinPhysicalOperator::next()
     rc = right_next();
     if (rc != RC::SUCCESS) {
       if (rc == RC::RECORD_EOF) {
-        rc = RC::SUCCESS;
         round_done_ = true;
         continue;
       } else {
         return rc;
       }
     }
+
+    bool matched = false;
+    rc = filter(matched);
+    if (rc != RC::SUCCESS || matched) {
+      return rc;
+    }
   }
-  return rc;
 }
 
 RC NestedLoopJoinPhysicalOperator::close()
 {
-  RC rc = left_->close();
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to close left oper. rc=%s", strrc(rc));
+  RC rc = RC::SUCCESS;
+  if (!left_closed_) {
+    rc = left_->close();
+    left_closed_ = true;
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to close left oper. rc=%s", strrc(rc));
+    }
   }
 
   if (!right_closed_) {
-    rc = right_->close();
-    if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to close right oper. rc=%s", strrc(rc));
-    } else {
-      right_closed_ = true;
+    RC right_rc = right_->close();
+    right_closed_ = true;
+    if (right_rc != RC::SUCCESS) {
+      LOG_WARN("failed to close right oper. rc=%s", strrc(right_rc));
+      if (rc == RC::SUCCESS) {
+        rc = right_rc;
+      }
     }
   }
+  left_tuple_ = nullptr;
+  right_tuple_ = nullptr;
+  joined_tuple_.set_left(nullptr);
+  joined_tuple_.set_right(nullptr);
+  round_done_ = true;
   return rc;
 }
 
@@ -93,6 +116,9 @@ RC NestedLoopJoinPhysicalOperator::left_next()
   }
 
   left_tuple_ = left_->current_tuple();
+  if (left_tuple_ == nullptr) {
+    return RC::INTERNAL;
+  }
   joined_tuple_.set_left(left_tuple_);
   return rc;
 }
@@ -112,6 +138,10 @@ RC NestedLoopJoinPhysicalOperator::right_next()
 
     rc = right_->open(trx_);
     if (rc != RC::SUCCESS) {
+      RC close_rc = right_->close();
+      if (close_rc != RC::SUCCESS) {
+        LOG_WARN("failed to clean up right oper after open error. rc=%s", strrc(close_rc));
+      }
       return rc;
     }
     right_closed_ = false;
@@ -128,6 +158,26 @@ RC NestedLoopJoinPhysicalOperator::right_next()
   }
 
   right_tuple_ = right_->current_tuple();
+  if (right_tuple_ == nullptr) {
+    return RC::INTERNAL;
+  }
   joined_tuple_.set_right(right_tuple_);
   return rc;
+}
+
+RC NestedLoopJoinPhysicalOperator::filter(bool &result)
+{
+  result = false;
+  for (const unique_ptr<Expression> &predicate : predicates_) {
+    Value value;
+    RC rc = predicate->get_value(joined_tuple_, value);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    if (!value.get_boolean()) {
+      return RC::SUCCESS;
+    }
+  }
+  result = true;
+  return RC::SUCCESS;
 }

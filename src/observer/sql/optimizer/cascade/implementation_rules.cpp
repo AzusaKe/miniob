@@ -12,6 +12,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/cascade/implementation_rules.h"
 #include "sql/operator/table_get_logical_operator.h"
 #include "sql/operator/table_scan_physical_operator.h"
+#include "sql/operator/join_logical_operator.h"
+#include "sql/operator/nested_loop_join_physical_operator.h"
 #include "sql/operator/project_logical_operator.h"
 #include "sql/operator/project_physical_operator.h"
 #include "sql/operator/insert_logical_operator.h"
@@ -58,13 +60,43 @@ void LogicalGetToPhysicalSeqScan::transform(OperatorNode* input,
 }
 
 // -------------------------------------------------------------------------------------------------
+// Physical Nested Loop Join
+// -------------------------------------------------------------------------------------------------
+LogicalInnerJoinToNestedLoopJoin::LogicalInnerJoinToNestedLoopJoin()
+{
+  type_ = RuleType::INNER_JOIN_TO_NL_JOIN;
+  match_pattern_ = make_unique<Pattern>(OpType::LOGICALINNERJOIN);
+  match_pattern_->add_child(new Pattern(OpType::LEAF));
+  match_pattern_->add_child(new Pattern(OpType::LEAF));
+}
+
+void LogicalInnerJoinToNestedLoopJoin::transform(OperatorNode *input,
+    std::vector<std::unique_ptr<OperatorNode>> *transformed, OptimizerContext *context) const
+{
+  auto join_oper = dynamic_cast<JoinLogicalOperator *>(input);
+  ASSERT(join_oper != nullptr && join_oper->children().size() == 2, "inner join must have two children");
+
+  vector<unique_ptr<Expression>> predicates;
+  for (const auto &predicate : join_oper->get_join_predicates()) {
+    predicates.push_back(predicate->copy());
+  }
+  auto physical_join = make_unique<NestedLoopJoinPhysicalOperator>();
+  physical_join->set_predicates(std::move(predicates));
+  for (auto &child : join_oper->children()) {
+    physical_join->add_general_child(child.get());
+  }
+  transformed->emplace_back(std::move(physical_join));
+}
+
+// -------------------------------------------------------------------------------------------------
 //  LogicalProjectionToProjection
 // -------------------------------------------------------------------------------------------------
-LogicalProjectionToProjection::LogicalProjectionToProjection() {
-  type_ = RuleType::PROJECTION_TO_PHYSOCAL;
+LogicalProjectionToProjection::LogicalProjectionToProjection(bool empty) {
+  type_ = empty ? RuleType::EMPTY_PROJECTION_TO_PHYSICAL : RuleType::PROJECTION_TO_PHYSOCAL;
   match_pattern_ = unique_ptr<Pattern>(new Pattern(OpType::LOGICALPROJECTION));
-  auto child = new Pattern(OpType::LEAF);
-  match_pattern_->add_child(child);
+  if (!empty) {
+    match_pattern_->add_child(new Pattern(OpType::LEAF));
+  }
 }
 
 void LogicalProjectionToProjection::transform(OperatorNode* input,
@@ -72,12 +104,10 @@ void LogicalProjectionToProjection::transform(OperatorNode* input,
                          OptimizerContext *context) const {
   auto project_oper = dynamic_cast<ProjectLogicalOperator*>(input);
   vector<unique_ptr<LogicalOperator>> &child_opers = project_oper->children();
-  ASSERT(child_opers.size() == 1, "only one child is supported for now");
-
-  unique_ptr<PhysicalOperator> child_phy_oper;
+  ASSERT(child_opers.size() <= 1, "projection supports zero or one child");
 
   auto project_operator = make_unique<ProjectPhysicalOperator>(std::move(project_oper->expressions()));
-  if (project_operator) {
+  if (!child_opers.empty()) {
     project_operator->add_general_child(child_opers.front().get());
   }
 

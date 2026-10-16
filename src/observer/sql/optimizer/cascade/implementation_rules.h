@@ -24,6 +24,18 @@ public:
       OptimizerContext *context) const override;
 };
 
+/**
+ * Rule transforms Logical INNER JOIN -> Physical Nested Loop Join
+ */
+class LogicalInnerJoinToNestedLoopJoin : public Rule
+{
+public:
+  LogicalInnerJoinToNestedLoopJoin();
+
+  void transform(OperatorNode *input, std::vector<std::unique_ptr<OperatorNode>> *transformed,
+      OptimizerContext *context) const override;
+};
+
 // TODO: support index scan
 // class LogicalGetToPhysicalIndexScan : public Rule {
 // };
@@ -34,7 +46,7 @@ public:
 class LogicalProjectionToProjection : public Rule
 {
 public:
-  LogicalProjectionToProjection();
+  explicit LogicalProjectionToProjection(bool empty = false);
 
   void transform(OperatorNode *input, std::vector<std::unique_ptr<OperatorNode>> *transformed,
       OptimizerContext *context) const override;

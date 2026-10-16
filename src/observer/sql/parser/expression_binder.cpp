@@ -144,12 +144,18 @@ RC ExpressionBinder::bind_unbound_field_expression(
 
   Table *table = nullptr;
   if (is_blank(table_name)) {
-    if (context_.query_tables().size() != 1) {
-      LOG_INFO("cannot determine table for field: %s", field_name);
-      return RC::SCHEMA_TABLE_NOT_EXIST;
+    for (Table *candidate : context_.query_tables()) {
+      if (candidate->table_meta().field(field_name) != nullptr) {
+        if (table != nullptr) {
+          LOG_INFO("ambiguous field: %s", field_name);
+          return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+        }
+        table = candidate;
+      }
     }
-
-    table = context_.query_tables()[0];
+    if (table == nullptr) {
+      return RC::SCHEMA_FIELD_MISSING;
+    }
   } else {
     table = context_.find_table(table_name);
     if (nullptr == table) {
@@ -419,6 +425,10 @@ RC ExpressionBinder::bind_aggregate_expression(
   vector<unique_ptr<Expression>> child_bound_expressions;
 
   if (child_expr->type() == ExprType::STAR && aggregate_type == AggregateExpr::Type::COUNT) {
+    const char *table_name = static_cast<StarExpr *>(child_expr.get())->table_name();
+    if (!is_blank(table_name) && context_.find_table(table_name) == nullptr) {
+      return RC::SCHEMA_TABLE_NOT_EXIST;
+    }
     ValueExpr *value_expr = new ValueExpr(Value(1));
     child_expr.reset(value_expr);
   } else {

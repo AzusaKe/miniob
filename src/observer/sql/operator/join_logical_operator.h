@@ -14,6 +14,10 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+
 #include "sql/operator/logical_operator.h"
 
 /**
@@ -53,7 +57,7 @@ public:
 
     LogicalProperty *left_log_prop  = log_props[0];
     LogicalProperty *right_log_prop = log_props[1];
-    int              card           = left_log_prop->get_card() * right_log_prop->get_card();
+    int64_t          card = static_cast<int64_t>(left_log_prop->get_card()) * right_log_prop->get_card();
     for (auto &predicate : join_predicates_) {
       if (predicate->type() != ExprType::COMPARISON) {
         continue;
@@ -66,7 +70,8 @@ public:
         card /= std::max(std::max(left_log_prop->get_card(), right_log_prop->get_card()), 1);
       }
     }
-    return make_unique<LogicalProperty>(card);
+    return make_unique<LogicalProperty>(
+        static_cast<int>(std::min<int64_t>(card, std::numeric_limits<int>::max())));
   }
 
 private:

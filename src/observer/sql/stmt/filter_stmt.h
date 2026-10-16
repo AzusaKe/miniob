@@ -78,6 +78,12 @@ public:
 public:
   const vector<FilterUnit *> &filter_units() const { return filter_units_; }
 
+  void append(FilterStmt &other)
+  {
+    filter_units_.insert(filter_units_.end(), other.filter_units_.begin(), other.filter_units_.end());
+    other.filter_units_.clear();
+  }
+
 public:
   static RC create(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
       const ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt);

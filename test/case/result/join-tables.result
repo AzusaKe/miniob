@@ -1,0 +1,210 @@
+DUPLICATE JOIN KEYS AND TYPED INPUT ROWS
+create table jt_left(id int, grp int, born date, tag char(8));
+SUCCESS
+create table jt_right(id int, score float, label char(8), date_text char(16));
+SUCCESS
+create table jt_third(id int, grp int);
+SUCCESS
+create table jt_empty(id int);
+SUCCESS
+insert into jt_left values(1, 1, '2000-02-29', 'one');
+SUCCESS
+insert into jt_left values(1, 2, '1969-12-31', 'two');
+SUCCESS
+insert into jt_left values(2, 2, '2038-02-01', 'two');
+SUCCESS
+insert into jt_right values(1, 1.5, 'one', '2000-02-29');
+SUCCESS
+insert into jt_right values(1, 2, 'two', '1969-12-31');
+SUCCESS
+insert into jt_right values(2, 2.5, 'two', '2038-02-01');
+SUCCESS
+insert into jt_right values(3, 3, 'three', '2400-02-29');
+SUCCESS
+insert into jt_third values(1, 2);
+SUCCESS
+insert into jt_third values(2, 2);
+SUCCESS
+
+DUPLICATE MATCHES PROJECTIONS AND CHAINED JOINS
+select jt_left.id, jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.id = jt_right.id;
+1 | ONE | ONE
+1 | ONE | TWO
+1 | TWO | ONE
+1 | TWO | TWO
+2 | TWO | TWO
+ID | TAG | LABEL
+select * from jt_left inner join jt_right on jt_left.id = jt_right.id;
+1 | 1 | 2000-02-29 | ONE | 1 | 1.5 | ONE | 2000-02-29
+1 | 1 | 2000-02-29 | ONE | 1 | 2 | TWO | 1969-12-31
+1 | 2 | 1969-12-31 | TWO | 1 | 1.5 | ONE | 2000-02-29
+1 | 2 | 1969-12-31 | TWO | 1 | 2 | TWO | 1969-12-31
+2 | 2 | 2038-02-01 | TWO | 2 | 2.5 | TWO | 2038-02-01
+ID | GRP | BORN | TAG | ID | SCORE | LABEL | DATE_TEXT
+select jt_left.id, jt_left.tag, jt_right.label, jt_third.grp from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_third on jt_right.id = jt_third.id;
+1 | ONE | ONE | 2
+1 | ONE | TWO | 2
+1 | TWO | ONE | 2
+1 | TWO | TWO | 2
+2 | TWO | TWO | 2
+ID | TAG | LABEL | GRP
+select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_third on jt_left.id = jt_third.id and jt_left.grp = jt_third.grp;
+TAG | LABEL
+TWO | ONE
+TWO | TWO
+TWO | TWO
+select tag, label, score from jt_left inner join jt_right on tag = label and jt_left.id = jt_right.id;
+ONE | ONE | 1.5
+TAG | LABEL | SCORE
+TWO | TWO | 2
+TWO | TWO | 2.5
+
+CONJUNCTIONS CONSTANTS AND WHERE PREDICATES
+select jt_left.id, jt_left.tag, jt_right.score from jt_left inner join jt_right on jt_left.id = jt_right.id and jt_left.tag = jt_right.label and jt_right.score > 1.5;
+1 | TWO | 2
+2 | TWO | 2.5
+ID | TAG | SCORE
+select jt_left.id, jt_left.tag from jt_left inner join jt_right on jt_left.id = jt_right.id and jt_right.score > 1.5 where jt_left.grp = 2 and jt_left.born > '1970-01-01';
+2 | TWO
+ID | TAG
+select jt_left.tag, jt_right.id from jt_left inner join jt_right on jt_left.grp = 1;
+ONE | 1
+ONE | 1
+ONE | 2
+ONE | 3
+TAG | ID
+select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_right.score = 2;
+ONE | TWO
+TAG | LABEL
+TWO | TWO
+TWO | TWO
+select jt_left.tag, jt_right.label from jt_left inner join jt_right on 1 = 1 and jt_left.id = jt_right.id;
+ONE | ONE
+ONE | TWO
+TAG | LABEL
+TWO | ONE
+TWO | TWO
+TWO | TWO
+select jt_left.id from jt_left inner join jt_right on 1 = 0;
+ID
+select jt_left.id, jt_right.id from jt_left inner join jt_right on jt_left.id < jt_right.id and jt_right.score < 3;
+1 | 2
+1 | 2
+ID | ID
+
+EXPLICIT AND IMPLICIT INNER JOINS CAN BE MIXED
+select jt_left.tag, jt_right.label, jt_third.grp from jt_left, jt_right, jt_third where jt_left.id = jt_right.id and jt_right.id = jt_third.id;
+ONE | ONE | 2
+ONE | TWO | 2
+TAG | LABEL | GRP
+TWO | ONE | 2
+TWO | TWO | 2
+TWO | TWO | 2
+select jt_left.tag, jt_right.label, jt_third.grp from jt_left inner join jt_right on jt_left.id = jt_right.id, jt_third where jt_right.id = jt_third.id;
+ONE | ONE | 2
+ONE | TWO | 2
+TAG | LABEL | GRP
+TWO | ONE | 2
+TWO | TWO | 2
+TWO | TWO | 2
+select jt_left.tag, jt_right.label, jt_third.grp from jt_left, jt_right inner join jt_third on jt_right.id = jt_third.id where jt_left.id = jt_right.id;
+ONE | ONE | 2
+ONE | TWO | 2
+TAG | LABEL | GRP
+TWO | ONE | 2
+TWO | TWO | 2
+TWO | TWO | 2
+
+AN EMPTY INPUT AT EVERY JOIN POSITION YIELDS NO ROWS
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id, jt_empty;
+ID
+select jt_empty.id from jt_empty inner join jt_left on jt_empty.id = jt_left.id;
+ID
+select jt_left.id from jt_left inner join jt_empty on jt_left.id = jt_empty.id;
+ID
+select jt_left.id from jt_left inner join jt_empty on jt_left.id = jt_empty.id inner join jt_third on jt_empty.id = jt_third.id;
+ID
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_empty on jt_right.id = jt_empty.id;
+ID
+
+NUMERIC PROMOTION AND DATE CHARACTER COMPARISON IN BOTH DIRECTIONS
+select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.born = jt_right.date_text;
+ONE | ONE
+TAG | LABEL
+TWO | TWO
+TWO | TWO
+select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_right.date_text = jt_left.born;
+ONE | ONE
+TAG | LABEL
+TWO | TWO
+TWO | TWO
+select jt_left.tag, jt_right.score from jt_left inner join jt_right on jt_left.grp = jt_right.score;
+TAG | SCORE
+TWO | 2
+TWO | 2
+select jt_left.tag, jt_right.score from jt_left inner join jt_right on jt_right.score >= jt_left.grp and jt_right.id = jt_left.id;
+ONE | 1.5
+ONE | 2
+TAG | SCORE
+TWO | 2
+TWO | 2.5
+
+INVALID RELATIONS FIELDS AMBIGUITY AND ON SCOPES FAIL
+select jt_left.id from jt_left inner join jt_missing on jt_left.id = jt_missing.id;
+FAILURE
+select jt_left.id from jt_left inner join jt_right on jt_left.missing = jt_right.id;
+FAILURE
+select jt_left.id from jt_left inner join jt_right on id = jt_right.id;
+FAILURE
+select id from jt_left inner join jt_right on jt_left.id = jt_right.id;
+FAILURE
+select jt_left.id from jt_left inner join jt_right on jt_third.id = jt_right.id;
+FAILURE
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_third.id inner join jt_third on jt_right.id = jt_third.id;
+FAILURE
+select jt_left.id from jt_left, jt_right inner join jt_third on jt_left.id = jt_right.id;
+FAILURE
+select jt_left.id from jt_left inner join jt_right on jt_left.born = '1900-02-29';
+FAILURE
+
+INDEXES PRESERVE DUPLICATE AND CHAINED JOIN RESULTS
+create index jt_left_id on jt_left(id);
+SUCCESS
+create index jt_right_id on jt_right(id);
+SUCCESS
+select jt_left.tag, jt_right.label from jt_left inner join jt_right on jt_left.id = jt_right.id and jt_right.score > 1.5 where jt_left.id = 1;
+ONE | TWO
+TAG | LABEL
+TWO | TWO
+select jt_left.tag, jt_right.label, jt_third.grp from jt_left inner join jt_right on jt_left.id = jt_right.id inner join jt_third on jt_right.id = jt_third.id where jt_third.id = 1;
+ONE | ONE | 2
+ONE | TWO | 2
+TAG | LABEL | GRP
+TWO | ONE | 2
+TWO | TWO | 2
+
+QUALIFIED WILDCARD AND FALSE CONDITIONS AFTER ROW PREDICATES
+select jt_left.* from jt_left inner join jt_right on jt_left.id = jt_right.id where jt_left.id = 2;
+ID | GRP | BORN | TAG
+2 | 2 | 2038-02-01 | TWO
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id and 1 = 0 where jt_left.grp = 2;
+ID
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id where jt_left.grp = 2 and 1 = 0;
+ID
+
+JOINS FALL BACK CORRECTLY AFTER ACTIVATING CHUNK AND CASCADE MODES
+set execution_mode='chunk_iterator';
+SUCCESS
+select jt_left.id from jt_left where 1 = 0;
+ID
+set use_cascade=1;
+SUCCESS
+select jt_left.id from jt_left inner join jt_right on jt_left.id = jt_right.id where jt_left.id = 2;
+ID
+2
+select jt_left.id from jt_left inner join jt_right on 1 = 0;
+ID
+set use_cascade=0;
+SUCCESS
+set execution_mode='tuple_iterator';
+SUCCESS
